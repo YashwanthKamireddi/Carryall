@@ -141,6 +141,20 @@ pub fn run() {
                 sync::spawn(app.handle().clone(), cfg);
             }
 
+            // --- Retention: keep history lean (prune non-pinned > 30 days) ----
+            {
+                let app_for_prune = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    const RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+                    if let Some(state) = app_for_prune.try_state::<AppState>() {
+                        if let Ok(store) = state.store.lock() {
+                            let _ = store.prune_older_than(now_ms() - RETENTION_MS);
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(6 * 60 * 60));
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
