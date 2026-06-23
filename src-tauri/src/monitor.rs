@@ -141,6 +141,17 @@ fn read_wayland() -> Option<NewClip> {
     use wl_clipboard_rs::paste::{get_contents, get_mime_types, ClipboardType, MimeType, Seat};
 
     let types = get_mime_types(ClipboardType::Regular, Seat::Unspecified).ok()?;
+
+    // Privacy: skip content a password manager marked as concealed (KDE/Chromium
+    // and many managers set this hint). Keeps passwords out of history.
+    const SENSITIVE_HINTS: &[&str] = &["passwordmanagerhint", "x-kde-passwordmanager", "concealed"];
+    if types
+        .iter()
+        .any(|t| SENSITIVE_HINTS.iter().any(|h| t.to_ascii_lowercase().contains(h)))
+    {
+        return None;
+    }
+
     let has = |m: &str| types.iter().any(|t| t == m);
 
     let read = |mime: MimeType| -> Option<Vec<u8>> {
