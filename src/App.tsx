@@ -234,7 +234,9 @@ export default function App() {
         <span class="keys">
           <kbd>↵</kbd> Paste
         </span>
-        <span class="brand">Clip</span>
+        <span class="keys">
+          <kbd>⌫</kbd> Delete
+        </span>
       </div>
     </div>
   );
