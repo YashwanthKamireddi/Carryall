@@ -1,0 +1,25 @@
+# Rust / Cargo
+/target
+**/target
+
+# Node / frontend
+node_modules
+dist
+*.tsbuildinfo
+
+# Tauri generated
+src-tauri/gen
+
+# Local data / databases (never commit clip history or relay backlog)
+*.db
+*.db-wal
+*.db-shm
+
+# Env & secrets
+.env
+.env.*
+
+# Logs & OS cruft
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,12 @@
+{
+  "name": "Clip",
+  "short_name": "Clip",
+  "description": "Your clipboard, on every device.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#16161c",
+  "theme_color": "#16161c",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

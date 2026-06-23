@@ -1,0 +1,16 @@
+[package]
+name = "clip-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+description = "Encrypted local clip history: SQLite + FTS5 full-text search. No platform/UI deps."
+
+[dependencies]
+clip-core = { workspace = true }
+# `bundled` compiles SQLite (with FTS5) from source, so there is no system
+# SQLite dependency and the same build works on every platform.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"

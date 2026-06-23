@@ -1,0 +1,20 @@
+[package]
+name = "clip-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+description = "Clip cross-device sync engine: HLC ordering, CRDT merge, E2E crypto, chunking. Pure, no network."
+
+[dependencies]
+clip-core = { workspace = true }
+serde = { workspace = true }
+blake3 = { workspace = true }
+
+# End-to-end encryption: AES-256-GCM AEAD + PBKDF2-HMAC-SHA256 key derivation.
+# PBKDF2 (not Argon2) so the browser PWA can derive the identical key with the
+# native Web Crypto API — no WASM needed for cross-platform interop.
+aes-gcm = "0.10"
+pbkdf2 = "0.12"
+sha2 = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }

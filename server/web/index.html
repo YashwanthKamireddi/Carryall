@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#16161c" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Clip" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="icon" href="/icon.svg" />
+    <title>Clip</title>
+    <style>
+      :root {
+        --bg: #16161c; --panel: #1f1f27; --stroke: #2c2c36;
+        --t1: #f2f2f5; --t2: #a0a0ad; --t3: #6b6b78; --accent: #0a84ff;
+        --k-text:#8e8e93;--k-link:#0a84ff;--k-color:#ff9f0a;--k-code:#30d158;
+        --k-rich_text:#bf5af2;--k-image:#ff375f;--k-files:#64d2ff;--k-video:#ff453a;--k-audio:#ffd60a;--k-binary:#98989d;
+      }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--t1);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+      body { display: flex; flex-direction: column;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+      header { padding: 14px 16px; border-bottom: 1px solid var(--stroke); display: flex; align-items: center; gap: 10px; }
+      header b { font-size: 17px; letter-spacing: .02em; }
+      #status { margin-left: auto; font-size: 12px; color: var(--t3); }
+      #status.on { color: var(--k-code); }
+      #connect { padding: 20px 16px; display: flex; flex-direction: column; gap: 12px; max-width: 440px; }
+      #connect p { color: var(--t2); font-size: 13px; line-height: 1.5; margin: 0 0 4px; }
+      input, button { font: inherit; border-radius: 12px; border: 1px solid var(--stroke);
+        background: var(--panel); color: var(--t1); padding: 13px 14px; outline: none; }
+      input::placeholder { color: var(--t3); }
+      button { background: var(--accent); border: none; font-weight: 600; }
+      button:active { opacity: .8; }
+      #list { flex: 1; overflow-y: auto; padding: 8px; -webkit-overflow-scrolling: touch; }
+      .empty { color: var(--t3); text-align: center; padding: 60px 20px; font-size: 14px; }
+      .row { display: flex; gap: 12px; align-items: center; padding: 12px; border-radius: 14px; }
+      .row:active { background: var(--panel); }
+      .thumb { width: 46px; height: 46px; border-radius: 10px; flex: 0 0 auto; display: grid; place-items: center;
+        background: var(--panel); border: 1px solid var(--stroke); overflow: hidden; color: var(--rail); font-weight: 700; }
+      .thumb img { width: 100%; height: 100%; object-fit: cover; }
+      .body { min-width: 0; flex: 1; }
+      .preview { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .preview.mono { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+      .meta { margin-top: 3px; display: flex; gap: 8px; align-items: center; }
+      .chip { font-size: 10.5px; font-weight: 700; color: var(--rail);
+        background: color-mix(in srgb, var(--rail) 18%, transparent); padding: 1px 8px; border-radius: 999px; }
+      .time { font-size: 11px; color: var(--t3); }
+      #composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--stroke); }
+      #composer input { flex: 1; }
+      #toast { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%);
+        background: #000; color: #fff; padding: 9px 16px; border-radius: 999px; font-size: 13px;
+        opacity: 0; transition: opacity .2s; pointer-events: none; }
+      #toast.show { opacity: .92; }
+      .hidden { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <b>Clip</b>
+      <span id="status">offline</span>
+    </header>
+
+    <div id="connect">
+      <p>Enter the same <b>account</b> and <b>passphrase</b> you use on your desktop. Your clips are end-to-end encrypted — the relay never sees them.</p>
+      <input id="account" placeholder="account (e.g. myteam)" autocapitalize="off" autocorrect="off" spellcheck="false" />
+      <input id="secret" type="password" placeholder="passphrase" />
+      <input id="relay" placeholder="relay url (optional)" autocapitalize="off" autocorrect="off" spellcheck="false" />
+      <button id="go">Connect</button>
+    </div>
+
+    <div id="list" class="hidden"></div>
+    <div id="composer" class="hidden">
+      <input id="msg" placeholder="Send to your devices…" />
+      <button id="send">Send</button>
+    </div>
+    <div id="toast"></div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

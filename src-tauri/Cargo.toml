@@ -1,0 +1,46 @@
+[package]
+name = "clip"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Clip — universal cross-platform clipboard, faster and smoother than native."
+authors = ["Clip"]
+
+[lib]
+# The `_lib` suffix avoids a name clash with the bin target on Windows.
+name = "clip_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+tauri-plugin-global-shortcut = "2"
+# Re-launching the binary toggles the palette instead of starting a second
+# copy — the idiomatic way to bind a summon key under Wayland compositors.
+tauri-plugin-single-instance = "2"
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+clip-core = { workspace = true }
+clip-store = { path = "../crates/clip-store" }
+clip-sync = { path = "../crates/clip-sync" }
+
+# Sync relay client (cross-network path). Plain ws:// for now (no TLS feature);
+# wss:// is added with a rustls feature when we ship a hosted relay.
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+tokio-tungstenite = { version = "0.23", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+
+# Cross-platform clipboard read/write + change monitoring (text, html, rtf,
+# files, image). This is what makes copies *and* OS screenshots auto-land.
+clipboard-rs = "0.3"
+base64 = "0.22"
+
+# Wayland-native clipboard (wlr-data-control). clipboard-rs only sees the
+# X11/XWayland selection, so on Wayland we read the real selection here.
+[target.'cfg(target_os = "linux")'.dependencies]
+wl-clipboard-rs = "0.9"

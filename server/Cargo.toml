@@ -1,0 +1,29 @@
+[package]
+name = "clip-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Clip sync relay: fans out end-to-end-encrypted clip events between an account's devices. Never sees plaintext."
+
+[[bin]]
+name = "clip-relay"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+axum = { version = "0.7", features = ["ws"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Optional restart-durable backlog (ciphertext only). `bundled` = no system dep.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Optional cross-instance fan-out for HA (any instance serves any account).
+redis = { version = "0.27", features = ["tokio-comp"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+tokio-tungstenite = { version = "0.23", default-features = false, features = ["connect"] }
+futures-util = "0.3"
+clip-core = { workspace = true }
+clip-sync = { path = "../crates/clip-sync" }
+serde_json = { workspace = true }

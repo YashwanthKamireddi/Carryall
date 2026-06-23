@@ -1,0 +1,12 @@
+[package]
+name = "clip-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+description = "Platform-agnostic engine for Clip: content model, classification, hashing, sync events."
+
+[dependencies]
+serde = { workspace = true }
+blake3 = { workspace = true }
+url = "2"

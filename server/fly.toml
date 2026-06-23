@@ -1,0 +1,28 @@
+# Fly.io deployment for the Clip sync relay.
+# Gives a permanent HTTPS URL (https://<app>.fly.dev) reachable anywhere, 24/7,
+# with TLS terminated by Fly — which also satisfies the PWA's secure-context
+# needs. Deploy from the repo root:  fly launch --copy-config --dockerfile server/Dockerfile
+app = "clip-relay"
+primary_region = "iad"
+
+[build]
+  dockerfile = "server/Dockerfile"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  # Scale to zero when idle; wake on the next connection. WebSockets keep a
+  # machine alive while devices are connected.
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
