@@ -254,14 +254,19 @@ impl SyncConfig {
         let secret = get("CLIP_SECRET", "secret").unwrap_or_else(|| account.clone());
         let device = get("CLIP_DEVICE", "device")
             .unwrap_or_else(|| format!("device-{}", std::process::id()));
-        let url = get("CLIP_RELAY_URL", "relay")
-            .unwrap_or_else(|| "ws://127.0.0.1:8787/sync".into());
+        let url =
+            get("CLIP_RELAY_URL", "relay").unwrap_or_else(|| "ws://127.0.0.1:8787/sync".into());
         let mut salt = account.as_bytes().to_vec();
         while salt.len() < 16 {
             salt.push(b'#');
         }
         let key = derive_key(secret.as_bytes(), &salt).ok()?;
-        Some(SyncConfig { account, device, url, key })
+        Some(SyncConfig {
+            account,
+            device,
+            url,
+            key,
+        })
     }
 }
 

@@ -102,16 +102,25 @@ pub fn run() -> io::Result<()> {
                         sel = 0;
                     }
                     KeyCode::Char(ch) => {
-                        // Delete with Ctrl+D, reload with Ctrl+R.
-                        if k.modifiers.contains(event::KeyModifiers::CONTROL) && ch == 'd' {
+                        let ctrl = k.modifiers.contains(event::KeyModifiers::CONTROL);
+                        if ctrl && ch == 'd' {
+                            // Ctrl-D: delete selected
                             if let Some(c) = view.get(sel) {
                                 let id = c.id.clone();
                                 let _ = store.delete(&id);
                                 all.retain(|x| x.id != id);
                             }
-                        } else if k.modifiers.contains(event::KeyModifiers::CONTROL) && ch == 'r' {
+                        } else if ctrl && ch == 'p' {
+                            // Ctrl-P: toggle pin
+                            if let Some(c) = view.get(sel) {
+                                let (id, pinned) = (c.id.clone(), c.pinned);
+                                let _ = store.set_pinned(&id, !pinned);
+                                all = store.recent(500).unwrap_or_default();
+                            }
+                        } else if ctrl && ch == 'r' {
+                            // Ctrl-R: reload from store
                             all = store.recent(500).unwrap_or_default();
-                        } else {
+                        } else if !ctrl {
                             query.push(ch);
                             sel = 0;
                         }
@@ -128,12 +137,42 @@ pub fn run() -> io::Result<()> {
 
     if let Some(clip) = chosen {
         copy_to_clipboard(&clip, &blob_dir);
+        paste_after_exit();
     }
     Ok(())
 }
 
+/// After the TUI closes and focus returns to the previous window, synthesize a
+/// paste. Spawned detached so it outlives this process.
+fn paste_after_exit() {
+    use std::process::{Command, Stdio};
+    #[cfg(target_os = "linux")]
+    {
+        let wayland = std::env::var("WAYLAND_DISPLAY")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+        let cmd = if wayland {
+            "sleep 0.18; wtype -M ctrl v -m ctrl"
+        } else {
+            "sleep 0.18; xdotool key --clearmodifiers ctrl+v"
+        };
+        let _ = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+}
+
 fn ui(f: &mut Frame, query: &str, view: &[&Clip], sel: usize) {
-    let chunks = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).split(f.area());
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(f.area());
 
     let search = Paragraph::new(format!(
         " {}",
@@ -154,8 +193,14 @@ fn ui(f: &mut Frame, query: &str, view: &[&Clip], sel: usize) {
     let items: Vec<ListItem> = view
         .iter()
         .map(|c| {
+            let mark = if c.pinned { "★ " } else { "▌ " };
+            let mark_color = if c.pinned {
+                Color::Rgb(255, 214, 10)
+            } else {
+                kind_color(c.kind)
+            };
             let line = Line::from(vec![
-                Span::styled("▌ ", Style::new().fg(kind_color(c.kind))),
+                Span::styled(mark, Style::new().fg(mark_color)),
                 Span::styled(
                     format!("{:<6} ", kind_label(c.kind)),
                     Style::new()
@@ -184,6 +229,11 @@ fn ui(f: &mut Frame, query: &str, view: &[&Clip], sel: usize) {
         )
         .highlight_symbol("");
     f.render_stateful_widget(list, chunks[1], &mut state);
+
+    let footer =
+        Paragraph::new(" ↑/↓ navigate   ⏎ paste   ^P pin   ^D delete   ^R refresh   esc quit")
+            .style(Style::new().fg(Color::DarkGray));
+    f.render_widget(footer, chunks[2]);
 }
 
 fn one_line(s: &str, max: usize) -> String {
