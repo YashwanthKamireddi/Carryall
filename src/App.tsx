@@ -97,6 +97,14 @@ export default function App() {
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
+    // Ctrl/Cmd + 1–9 → instantly paste the Nth visible clip.
+    if ((e.ctrlKey || e.metaKey) && e.key >= "1" && e.key <= "9") {
+      e.preventDefault();
+      const idx = Number(e.key) - 1;
+      const target = clips()[idx];
+      if (target) void commit(target);
+      return;
+    }
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
