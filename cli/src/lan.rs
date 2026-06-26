@@ -230,7 +230,7 @@ impl Inbound {
         }
         match clip.blob_ref.as_deref() {
             Some(r) if crate::blobs::existing_path(&ctx.blob_dir, r).is_none() => {
-                self.pending.insert(r.to_string(), clip);
+                crate::proto::pending_insert(&mut self.pending, r.to_string(), clip);
             }
             _ => finalize_apply(ctx, clip),
         }

@@ -541,7 +541,7 @@ async fn sync_connection(ctx: &Ctx, cfg: &SyncConfig, endpoint: &str) -> Result<
                     match clip.blob_ref.as_deref() {
                         // Needs a blob we don't have yet — wait for its chunks.
                         Some(r) if crate::blobs::existing_path(&ctx.blob_dir, r).is_none() => {
-                            pending.insert(r.to_string(), clip);
+                            crate::proto::pending_insert(&mut pending, r.to_string(), clip);
                         }
                         // No blob, or blob already present — apply immediately.
                         _ => finalize_apply(ctx, clip),

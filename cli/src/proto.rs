@@ -46,12 +46,40 @@ impl Dedup {
 /// Raw bytes per blob chunk before base64 (kept in sync across transports).
 pub const CHUNK: usize = 48 * 1024;
 
+/// Max clips held awaiting their blob. Normal in-flight is ~1; this only bounds
+/// memory if a peer streams metadata whose blob never completes. The clip is
+/// already persisted to history before it lands here, so evicting one merely
+/// skips its auto-apply to the native clipboard — overload protection, not loss.
+pub const MAX_PENDING: usize = 256;
+
+/// Insert `key→val` into a "waiting on blob" map, bounding it to `MAX_PENDING`
+/// (drops an existing entry when full). Only triggers under pathological
+/// never-completing transfers; in normal use the map holds ~1 entry.
+pub fn pending_insert<V>(map: &mut HashMap<String, V>, key: String, val: V) {
+    if map.len() >= MAX_PENDING && !map.contains_key(&key) {
+        if let Some(victim) = map.keys().next().cloned() {
+            map.remove(&victim);
+        }
+    }
+    map.insert(key, val);
+}
+
+/// Max number of partially-received blobs held at once. A blob is normally
+/// completed within milliseconds of its first chunk, so real in-flight count is
+/// tiny; this caps memory if a peer sends chunks that never complete (disconnect
+/// mid-transfer, or a backlog replay of metadata whose chunks were evicted).
+const MAX_INFLIGHT: usize = 64;
+
 /// Reassembles blobs from out-of-order chunk frames, keyed by blob ref.
 /// Tolerant of duplicate chunks and any arrival order; yields the full bytes
-/// exactly once when the final missing piece arrives.
+/// exactly once when the final missing piece arrives. Bounded to `MAX_INFLIGHT`
+/// partial blobs (oldest-started evicted first) so a never-completing transfer
+/// can't grow memory without limit.
 #[derive(Default)]
 pub struct Reassembler {
     bufs: HashMap<String, Buf>,
+    order: VecDeque<String>,
+    cap: usize,
 }
 
 struct Buf {
@@ -61,7 +89,20 @@ struct Buf {
 
 impl Reassembler {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            bufs: HashMap::new(),
+            order: VecDeque::new(),
+            cap: MAX_INFLIGHT,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_cap(cap: usize) -> Self {
+        Self {
+            bufs: HashMap::new(),
+            order: VecDeque::new(),
+            cap: cap.max(1),
+        }
     }
 
     /// Add chunk `i` of `n` for `key`. Returns `Some(whole)` once all `n`
@@ -69,6 +110,17 @@ impl Reassembler {
     pub fn add(&mut self, key: &str, i: usize, n: usize, bytes: Vec<u8>) -> Option<Vec<u8>> {
         if n == 0 {
             return None;
+        }
+        // New blob: enforce the in-flight cap by evicting the oldest partial.
+        if !self.bufs.contains_key(key) {
+            while self.order.len() >= self.cap {
+                if let Some(old) = self.order.pop_front() {
+                    self.bufs.remove(&old);
+                } else {
+                    break;
+                }
+            }
+            self.order.push_back(key.to_string());
         }
         let buf = self.bufs.entry(key.to_string()).or_insert_with(|| Buf {
             parts: vec![None; n],
@@ -80,6 +132,7 @@ impl Reassembler {
         }
         if buf.have == buf.parts.len() {
             let buf = self.bufs.remove(key).unwrap();
+            self.order.retain(|k| k != key);
             Some(buf.parts.into_iter().flatten().flatten().collect())
         } else {
             None
@@ -142,5 +195,35 @@ mod tests {
         let mut r = Reassembler::new();
         assert_eq!(r.add("a", 0, 1, b"A".to_vec()), Some(b"A".to_vec()));
         assert_eq!(r.add("b", 0, 1, b"B".to_vec()), Some(b"B".to_vec()));
+    }
+
+    #[test]
+    fn pending_insert_bounds_the_map() {
+        let mut m: HashMap<String, u32> = HashMap::new();
+        for i in 0..(MAX_PENDING + 50) {
+            pending_insert(&mut m, format!("k{i}"), i as u32);
+        }
+        assert!(m.len() <= MAX_PENDING, "pending map stays bounded");
+        // Re-inserting an existing key doesn't evict (updates in place).
+        let key = m.keys().next().cloned().unwrap();
+        let len = m.len();
+        pending_insert(&mut m, key, 999);
+        assert_eq!(m.len(), len);
+    }
+
+    #[test]
+    fn bounds_inflight_partials_evicting_oldest() {
+        let mut r = Reassembler::with_cap(2);
+        // Three never-completing 2-chunk blobs; cap is 2 in-flight.
+        r.add("a", 0, 2, b"a0".to_vec()); // partial
+        r.add("b", 0, 2, b"b0".to_vec()); // partial
+        r.add("c", 0, 2, b"c0".to_vec()); // starting "c" evicts oldest ("a")
+        assert_eq!(r.bufs.len(), 2);
+        assert!(!r.bufs.contains_key("a"), "oldest partial evicted");
+        assert!(r.bufs.contains_key("b") && r.bufs.contains_key("c"));
+        // Completing a live one still works and frees its slot + order entry.
+        assert_eq!(r.add("b", 1, 2, b"b1".to_vec()), Some(b"b0b1".to_vec()));
+        assert_eq!(r.bufs.len(), 1);
+        assert_eq!(r.order.len(), 1);
     }
 }
