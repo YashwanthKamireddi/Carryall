@@ -173,11 +173,17 @@
       /* Kill the grey mobile tap-flash + the 300ms delay so taps feel instant. */
       button, .cell, .act { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 
-      /* Floating dock composer — the one place translucency belongs */
+      /* Floating dock composer — Liquid Glass: frosted material refracting the
+         list behind it, a specular top light edge, hairline stroke, soft lift. */
       #composer { position: fixed; left: 12px; right: 12px; bottom: calc(10px + env(safe-area-inset-bottom));
         display: flex; align-items: center; gap: 8px; padding: 7px; border-radius: 27px; z-index: 5;
-        background: var(--bar); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
-        border: .5px solid var(--bar-stroke); box-shadow: 0 8px 30px -8px rgba(0,0,0,.5); }
+        background: var(--bar); backdrop-filter: blur(30px) saturate(190%); -webkit-backdrop-filter: blur(30px) saturate(190%);
+        border: .5px solid var(--bar-stroke);
+        box-shadow: 0 10px 34px -10px rgba(0,0,0,.55), inset 0 .5px 0 rgba(255,255,255,.20); }
+      /* specular sheen — a faint white light off the top of the glass (no color washes) */
+      #composer::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+        background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,0) 46%); }
+      #composer > * { position: relative; }
       #composer input { flex: 1; height: 40px; padding: 0 16px; border-radius: 20px; border: none;
         background: var(--card); color: var(--label); font: inherit; font-size: 16px; outline: none; }
       #composer input::placeholder { color: var(--label3); }
@@ -191,6 +197,16 @@
         background: var(--press); color: var(--label); padding: 10px 18px; border-radius: 999px; font-size: 14px; font-weight: 500;
         opacity: 0; transition: all .24s var(--spring); pointer-events: none; z-index: 9; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
       #toast.show { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+
+      /* Liquid Glass chrome: faint specular top edge on the small pills (subtle,
+         white only — no color washes), so they read as the same glass family. */
+      #status, .navbtn, #filters .seg { box-shadow: inset 0 .5px 0 rgba(255,255,255,.10); }
+
+      /* Smooth one-shot entrance for the list when you connect (no per-render
+         re-trigger, so search/typing stays instant and flicker-free). */
+      @keyframes listEnter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+      #list.entering { animation: listEnter .5s var(--spring); }
+      @media (prefers-reduced-motion: reduce) { #list.entering { animation: none; } }
     </style>
   </head>
   <body>

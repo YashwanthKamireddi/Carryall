@@ -626,6 +626,8 @@ async function connect() {
   $("searchbar").classList.remove("hidden");
   $("clearall").classList.remove("hidden");
   $("filters").classList.remove("hidden");
+  $("list").classList.add("entering"); // one-shot smooth entrance
+  setTimeout(() => $("list").classList.remove("entering"), 600);
   $("list").classList.remove("hidden");
   $("composer").classList.remove("hidden");
   render();
