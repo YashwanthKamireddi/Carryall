@@ -244,20 +244,83 @@ fn clipboard_rs_loop(daemon: Ctx) {
 
 #[cfg(target_os = "linux")]
 fn wayland_loop(daemon: Ctx) {
+    let mut last_sig: Option<Vec<u8>> = None;
     let mut last_id: Option<String> = None;
     loop {
-        if let Some(nc) = read_wayland() {
-            let id = nc.dedup_id();
-            if last_id.as_deref() != Some(id.as_str()) {
-                last_id = Some(id.clone());
-                // Skip clips we just wrote from an incoming sync.
-                if !daemon.take_suppressed(&id) {
-                    daemon.ingest(nc);
+        // Cheap gate: only read the full clipboard payload (which can be a
+        // multi-MB image/file) when a capped probe shows the selection changed.
+        // Without this, idle polling re-transferred + re-hashed the entire
+        // payload every cycle (~30% of a core with a large clip resident).
+        let sig = clipboard_signal();
+        if sig != last_sig {
+            last_sig = sig.clone();
+            if sig.is_some() {
+                if let Some(nc) = read_wayland() {
+                    let id = nc.dedup_id();
+                    if last_id.as_deref() != Some(id.as_str()) {
+                        last_id = Some(id.clone());
+                        // Skip clips we just wrote from an incoming sync.
+                        if !daemon.take_suppressed(&id) {
+                            daemon.ingest(nc);
+                        }
+                    }
                 }
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
+}
+
+/// Largest prefix we read to detect a clipboard change. Content at or below this
+/// is captured exactly; only larger payloads rely on a prefix probe. Kept small
+/// so a large payload parked on the clipboard costs almost nothing to re-probe
+/// each idle poll, while still exactly covering essentially all text clips.
+#[cfg(target_os = "linux")]
+const PROBE_CAP: u64 = 64 * 1024;
+
+/// A cheap change-detection signal for the Wayland clipboard: the sorted mime
+/// types plus at most `PROBE_CAP` bytes of the primary content. `None` means
+/// nothing to capture (empty, or password-manager-sensitive). Reading only a
+/// capped prefix keeps idle polling from transferring a large payload every
+/// cycle; pipe backpressure means we only pull what we read.
+#[cfg(target_os = "linux")]
+fn clipboard_signal() -> Option<Vec<u8>> {
+    use std::io::Read;
+    use wl_clipboard_rs::paste::{get_contents, get_mime_types, ClipboardType, MimeType, Seat};
+    let types = get_mime_types(ClipboardType::Regular, Seat::Unspecified).ok()?;
+    if types.is_empty() {
+        return None;
+    }
+    const SENSITIVE: &[&str] = &["passwordmanagerhint", "x-kde-passwordmanager", "concealed"];
+    if types.iter().any(|t| {
+        let t = t.to_ascii_lowercase();
+        SENSITIVE.iter().any(|h| t.contains(h))
+    }) {
+        return None;
+    }
+    let has = |m: &str| types.iter().any(|t| t == m);
+    // Same primary-content selection as read_wayland, so the signal tracks the
+    // exact bytes that would be captured.
+    let mime = if has("image/png") {
+        MimeType::Specific("image/png")
+    } else if has("text/uri-list") {
+        MimeType::Specific("text/uri-list")
+    } else {
+        MimeType::Text
+    };
+    // Lead the signal with the sorted mime types so a type change is detected
+    // even if the probe bytes happen to match.
+    let mut sig: Vec<u8> = Vec::new();
+    let mut sorted: Vec<&String> = types.iter().collect();
+    sorted.sort();
+    for t in sorted {
+        sig.extend_from_slice(t.as_bytes());
+        sig.push(0);
+    }
+    sig.push(0xFF);
+    let (pipe, _) = get_contents(ClipboardType::Regular, Seat::Unspecified, mime).ok()?;
+    pipe.take(PROBE_CAP).read_to_end(&mut sig).ok()?;
+    Some(sig)
 }
 
 #[cfg(target_os = "linux")]
