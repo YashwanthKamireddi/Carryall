@@ -136,6 +136,25 @@ const DOWNLOAD_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 
 // ---------- helpers ----------
 const bytesToStr = (arr) => (arr ? dec.decode(new Uint8Array(arr)) : "");
+
+// Cached, lowercased searchable text per clip: the preview PLUS the full body for
+// text-like kinds, so search matches content beyond the 400-char preview. Keyed
+// by the content-addressed id (never changes for the same content), computed once.
+const searchCache = new Map();
+function searchText(c) {
+  let s = searchCache.get(c.id);
+  if (s === undefined) {
+    s = c.preview || "";
+    const k = normKind(c.kind);
+    if ((k === "text" || k === "code" || k === "link" || k === "rich_text") && c.body) {
+      const full = bytesToStr(c.body);
+      if (full.length > s.length) s = full; // body holds the complete, untruncated text
+    }
+    s = s.toLowerCase();
+    searchCache.set(c.id, s);
+  }
+  return s;
+}
 const b64 = (arr) => { let s = ""; const u = new Uint8Array(arr); for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s); };
 const escapeHtml = (s) => { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; };
 function relTime(ms) {
@@ -160,7 +179,7 @@ function render() {
   const q = query.trim().toLowerCase();
   let arr = [...clips.values()];
   if (filter !== "all") arr = arr.filter((c) => filterBucket(normKind(c.kind)) === filter);
-  if (q) arr = arr.filter((c) => (c.preview || "").toLowerCase().includes(q));
+  if (q) arr = arr.filter((c) => searchText(c).includes(q));
   arr.sort((a, b) => b.created_at - a.created_at);
   const pinned = arr.filter((c) => c.pinned);
   const recent = arr.filter((c) => !c.pinned);
