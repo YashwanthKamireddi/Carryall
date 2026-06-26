@@ -505,11 +505,21 @@ fn spawn_sync(ctx: Ctx, cfg: SyncConfig) {
             url_encode(&cfg.account),
             url_encode(&cfg.device)
         );
+        // Exponential reconnect backoff (1s → 30s) so a down/misconfigured relay
+        // isn't hammered every few seconds (wasted CPU/battery + log spam). A
+        // connection that stayed up a while resets the backoff to stay snappy.
+        use std::time::{Duration, Instant};
+        let mut backoff = Duration::from_secs(1);
         loop {
+            let started = Instant::now();
             if let Err(e) = sync_connection(&ctx, &cfg, &endpoint).await {
                 eprintln!("clip: sync ended: {e}");
             }
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            if started.elapsed() >= Duration::from_secs(10) {
+                backoff = Duration::from_secs(1); // was genuinely connected → reset
+            }
+            tokio::time::sleep(backoff).await;
+            backoff = backoff.saturating_mul(2).min(Duration::from_secs(30));
         }
     });
 }

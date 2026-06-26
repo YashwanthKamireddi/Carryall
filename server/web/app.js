@@ -610,12 +610,19 @@ async function sendAttachments(fileList) {
 }
 
 // ---------- connection ----------
+let wsBackoff = 1000; // exponential reconnect backoff (1s → 30s), reset on connect
 function openWs(url) {
   setStatus("connecting…", "connecting");
   ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";
-  ws.onopen = () => setStatus("synced", "on");
-  ws.onclose = () => { setStatus("reconnecting…", "connecting"); setTimeout(() => openWs(url), 2000); };
+  ws.onopen = () => { setStatus("synced", "on"); wsBackoff = 1000; };
+  ws.onclose = () => {
+    setStatus("reconnecting…", "connecting");
+    // Back off so an unreachable relay isn't retried every 2s (battery drain on
+    // mobile); resets to 1s once a connection succeeds.
+    setTimeout(() => openWs(url), wsBackoff);
+    wsBackoff = Math.min(wsBackoff * 2, 30000);
+  };
   ws.onerror = () => setStatus("error", "");
   ws.onmessage = async (e) => {
     let pt;
