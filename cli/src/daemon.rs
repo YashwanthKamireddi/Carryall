@@ -472,9 +472,31 @@ fn read_config() -> std::collections::HashMap<String, String> {
     map
 }
 
+/// Percent-encode a query value (RFC 3986 unreserved set kept). The PWA encodes
+/// account/device with `encodeURIComponent`; the relay percent-decodes the query,
+/// so the daemon MUST encode too or an account with a space/`&`/`+`/`#` would land
+/// in a different room (or fail to connect) — silently breaking desktop↔phone sync.
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{b:02X}"));
+        }
+    }
+    out
+}
+
 fn spawn_sync(ctx: Ctx, cfg: SyncConfig) {
     tokio::spawn(async move {
-        let endpoint = format!("{}?account={}&device={}", cfg.url, cfg.account, cfg.device);
+        let endpoint = format!(
+            "{}?account={}&device={}",
+            cfg.url,
+            url_encode(&cfg.account),
+            url_encode(&cfg.device)
+        );
         loop {
             if let Err(e) = sync_connection(&ctx, &cfg, &endpoint).await {
                 eprintln!("clip: sync ended: {e}");
@@ -675,8 +697,20 @@ fn should_apply(
 
 #[cfg(test)]
 mod tests {
-    use super::should_apply;
+    use super::{should_apply, url_encode};
     use crate::proto::Dedup;
+
+    #[test]
+    fn url_encode_matches_what_the_relay_decodes() {
+        // unreserved chars pass through
+        assert_eq!(url_encode("yk-clip_1.0~"), "yk-clip_1.0~");
+        // the chars that would otherwise break the query / pick a different room
+        assert_eq!(url_encode("my team"), "my%20team");
+        assert_eq!(url_encode("a&b"), "a%26b");
+        assert_eq!(url_encode("a+b"), "a%2Bb");
+        assert_eq!(url_encode("a#b"), "a%23b");
+        assert_eq!(url_encode("100%"), "100%25");
+    }
 
     #[test]
     fn applies_new_clip_once_then_dedups() {
