@@ -244,27 +244,80 @@ fn clipboard_rs_loop(daemon: Ctx) {
 
 #[cfg(target_os = "linux")]
 fn wayland_loop(daemon: Ctx) {
+    // Prefer event-driven capture (`wl-paste --watch`): zero idle wakeups and
+    // instant capture, vs. polling. wl-clipboard is already required on Wayland
+    // (we apply clips with wl-copy), so this adds no new dependency. If it isn't
+    // available we poll; if the watcher dies (e.g. compositor restart) we retry,
+    // and only poll permanently when watching can't start at all.
+    loop {
+        if !run_wayland_watch(&daemon) {
+            wayland_poll_loop(&daemon); // never returns — wl-paste unavailable
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
+/// Apply the current Wayland clipboard once: read it, and ingest unless it's a
+/// duplicate or a clip we just wrote ourselves. Shared by the event + poll paths.
+#[cfg(target_os = "linux")]
+fn capture_once(daemon: &Ctx, last_id: &mut Option<String>) {
+    if let Some(nc) = read_wayland() {
+        let id = nc.dedup_id();
+        if last_id.as_deref() != Some(id.as_str()) {
+            *last_id = Some(id.clone());
+            if !daemon.take_suppressed(&id) {
+                daemon.ingest(nc);
+            }
+        }
+    }
+}
+
+/// Event-driven capture via `wl-paste --watch`, which blocks on the wlr
+/// data-control protocol and emits one line per selection change (and once at
+/// start). Returns `true` if the watcher ran (and later exited), `false` if it
+/// couldn't be spawned (so the caller falls back to polling).
+#[cfg(target_os = "linux")]
+fn run_wayland_watch(daemon: &Ctx) -> bool {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    let mut child = match Command::new("wl-paste")
+        .args(["--watch", "echo", ""]) // one (blank) line per clipboard change
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false, // wl-paste not installed → caller polls
+    };
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        return false;
+    };
+    let mut last_id: Option<String> = None;
+    for line in BufReader::new(stdout).lines() {
+        if line.is_err() {
+            break; // pipe closed → watcher died
+        }
+        capture_once(daemon, &mut last_id);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    true
+}
+
+/// Fallback capture: poll the clipboard, gated by a cheap capped probe so a large
+/// payload parked on the clipboard costs almost nothing to re-check. Never
+/// returns. Used only when `wl-paste --watch` is unavailable.
+#[cfg(target_os = "linux")]
+fn wayland_poll_loop(daemon: &Ctx) -> ! {
     let mut last_sig: Option<Vec<u8>> = None;
     let mut last_id: Option<String> = None;
     loop {
-        // Cheap gate: only read the full clipboard payload (which can be a
-        // multi-MB image/file) when a capped probe shows the selection changed.
-        // Without this, idle polling re-transferred + re-hashed the entire
-        // payload every cycle (~30% of a core with a large clip resident).
         let sig = clipboard_signal();
         if sig != last_sig {
             last_sig = sig.clone();
             if sig.is_some() {
-                if let Some(nc) = read_wayland() {
-                    let id = nc.dedup_id();
-                    if last_id.as_deref() != Some(id.as_str()) {
-                        last_id = Some(id.clone());
-                        // Skip clips we just wrote from an incoming sync.
-                        if !daemon.take_suppressed(&id) {
-                            daemon.ingest(nc);
-                        }
-                    }
-                }
+                capture_once(daemon, &mut last_id);
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
