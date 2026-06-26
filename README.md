@@ -1,76 +1,62 @@
 # Clip
 
-**Universal cross-platform clipboard — everything you copy, on every device, faster than native.**
+**The fast, lightweight clipboard that syncs to all your devices — end-to-end encrypted.**
 
-If it can land on the clipboard, Clip keeps it: text, links, colors, code,
-rich text, images, screenshots, files, video, audio, binary. Captured
-automatically, classified, deduplicated, full-text searchable, and one keystroke
-from being pasted back — with **end-to-end-encrypted sync to all your devices,
-anywhere** (including your iPhone, via a web app — no Mac required).
+A tiny background daemon watches your **native OS clipboard**; everything you copy
+(text, links, code, colors, images, files, video, audio) is captured, deduplicated,
+and full-text searchable. Browse it in a snappy **terminal UI**, and see it on your
+**phone** — all **end-to-end encrypted**, relay sees only ciphertext.
 
-## Why it beats Apple's Universal Clipboard
+Think **clipse's lightweight TUI + ClipCascade's E2E cross-device sync + a phone client** — the combination none of them offer.
 
-| Apple Universal Clipboard | Clip |
-|---|---|
-| Only the most recent item | Full searchable history |
-| ~2-minute lifetime | Kept until you say otherwise |
-| Apple devices only | Windows · Linux · iPhone (web) · Android-ready |
-| Needs proximity + Bluetooth, flaky when locked | Any network, via relay; LAN fast-path planned |
-| Large files punt to AirDrop | Chunked, resumable, dedup'd blobs |
-| Opaque | End-to-end encrypted — the relay only sees ciphertext |
+## Why it's different
 
-## Architecture
+| | CopyQ | clipse | ClipCascade | **Clip** |
+|---|---|---|---|---|
+| Lightweight TUI | ❌ heavy GUI | ✅ | ❌ | ✅ |
+| Cross-device E2E sync | ❌ | ❌ | ✅ | ✅ |
+| Phone client | ❌ | ❌ | partial | ✅ (PWA, no app store) |
+| Footprint | large | tiny | small | **3 MB, no WebView** |
+
+## Architecture (all Rust, zero GUI bloat)
 
 ```
-Desktop (Tauri 2 · Rust core + SolidJS)              iPhone / web
-  capture → classify → dedup → encrypted SQLite + FTS5    PWA in Safari
-  blob store · global hotkey · auto-paste                 (Add to Home Screen)
-        \                                                   /
-         \—— E2E (PBKDF2 + AES-256-GCM) ——\     /—— E2E ——/
-                                     clip-relay (Rust/axum)
-                          account-room WebSocket fan-out + offline backlog
-                                  (never decrypts — ciphertext only)
+ clip daemon  ──capture native clipboard──▶  SQLite + FTS5 (clip-store)
+      │                                            ▲
+      │ E2E (PBKDF2 + AES-256-GCM)                 │ reads
+      ▼                                       clip  (ratatui TUI)
+ clip-relay (axum)  ◀──ciphertext──▶  phone PWA (served by the relay)
 ```
 
-- **`crates/clip-core`** — content model, classifier, blake3 dedup (pure).
-- **`crates/clip-store`** — SQLite + FTS5 history (dedup, pin, search, retention).
+- **`cli`** — the `clip` binary: `clip daemon` (background capture + sync) and `clip` (TUI).
+- **`crates/clip-core`** — content model, classifier, blake3 dedup.
+- **`crates/clip-store`** — SQLite + FTS5 history.
 - **`crates/clip-sync`** — HLC ordering, CRDT merge, E2E crypto, chunking.
-- **`src-tauri`** — desktop app: capture (X11 + Wayland), blob store, hotkey,
-  auto-paste, tray, sync client.
-- **`server`** — relay + the embedded iPhone/web PWA.
+- **`server`** — relay (account-room fan-out, never decrypts) + the phone PWA.
 
-## Build & run (desktop, Linux/Windows)
+## Usage
 
 ```bash
-pnpm install
-pnpm tauri build --no-bundle      # standalone binary at target/release/clip
-./target/release/clip             # summon with the bound hotkey; tray icon
+cargo build --release            # builds clip + clip-relay
+./target/release/clip daemon &   # background capture (autostart this)
+./target/release/clip            # open the TUI: search, ↑/↓, Enter to copy, Ctrl-D delete, Esc quit
 ```
 
-> Use `pnpm tauri build`, **not** `cargo build` — only the former embeds the frontend.
+Bind `clip` to a key in your WM (e.g. Hyprland `bind = SUPER, V, exec, foot clip`).
 
-## Sync setup
-
-Run the relay (or deploy it — see `server/DEPLOY.md` for an always-on public URL):
+### Cross-device sync
 
 ```bash
-./target/release/clip-relay                       # binds 0.0.0.0:8787
-# desktop with sync on:
-CLIP_ACCOUNT=you CLIP_SECRET=pass \
-  CLIP_RELAY_URL=ws://127.0.0.1:8787/sync ./target/release/clip
-# iPhone: open the relay URL in Safari, enter the same account + passphrase
+./target/release/clip-relay      # or deploy it (server/DEPLOY.md) for a public HTTPS URL
+CLIP_ACCOUNT=you CLIP_SECRET=pass CLIP_RELAY_URL=ws://host:8787/sync ./target/release/clip daemon
 ```
 
-Sync is **off unless `CLIP_ACCOUNT` is set** — default runs are fully local and private.
+On your phone, open the relay URL in the browser → enter the same account + passphrase →
+Add to Home Screen. Sync is **off unless `CLIP_ACCOUNT` is set** (default = local & private).
+
+> Mobile note: phone OSes forbid background clipboard access, so on the phone you **view**
+> your synced clips and **tap to copy** — automatic background capture is desktop-only.
 
 ## Tests
 
-`cargo test` across the workspace — core, store, sync (HLC/merge/crypto/chunk),
-and the relay incl. an end-to-end two-device sync test. Browser↔Rust crypto
-interop is verified with Web Crypto.
-
-## Status
-
-Phases 0–3 complete (capture, power UX, E2E cross-device sync) + iPhone PWA.
-Native iOS/Android need a Mac / Android NDK respectively; the architecture is
-mobile-ready. A full UX visual redesign is planned as a dedicated pass.
+`cargo test` — core, store, sync (HLC/merge/crypto/chunk), relay (+ a two-device E2E test).

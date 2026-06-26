@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/clip-core", "crates/clip-store", "crates/clip-sync", "server"]
+members = ["cli", "crates/clip-core", "crates/clip-store", "crates/clip-sync", "server"]
 
 [workspace.package]
 version = "0.1.0"
