@@ -14,117 +14,226 @@
     <link rel="icon" href="/icon.svg" />
     <title>Clip</title>
     <style>
-      /* iOS / iPadOS 26 design language (Apple Design Resources). On iPhone the
-         SF stack resolves to real San Francisco. */
+      /* Authentic iOS/iPadOS — clean system grouped background (NO color washes),
+         solid grouped-list cards, translucency reserved for nav + the floating
+         dock (where Apple actually uses it). SF resolves to real SF on Apple. */
       :root {
         --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Inter, system-ui, sans-serif;
         --mono: "SF Mono", ui-monospace, Menlo, monospace;
-        --bg: #000; --grouped: #1c1c1e; --grouped-hi: #2c2c2e; --fill: rgba(120,120,128,.24);
-        --sep: rgba(84,84,88,.6); --label: #fff; --label2: rgba(235,235,245,.6); --label3: rgba(235,235,245,.3);
-        --blue: #0a84ff; --r-group: 12px; --r-field: 11px; --r-icon: 8px;
+        /* iOS dark system colors */
+        --bg: #000000;             /* systemBackground (grouped base) */
+        --card: #1c1c1e;           /* secondarySystemGroupedBackground */
+        --press: #2c2c2e;          /* cell highlight */
+        --sep: rgba(255,255,255,.10);
+        --label: #ffffff;
+        --label2: rgba(235,235,245,.6);
+        --label3: rgba(235,235,245,.3);
+        --blue: #0a84ff;
+        --r-group: 12px; --r-field: 10px; --r-icon: 7px;
+        /* Per-kind icon tints — iOS system palette */
         --c-text:#8e8e93;--c-link:#0a84ff;--c-color:#ff9f0a;--c-code:#30d158;--c-rich_text:#bf5af2;
         --c-image:#ff375f;--c-files:#5ac8fa;--c-video:#ff453a;--c-audio:#ff9f0a;--c-binary:#8e8e93;
         --spring: cubic-bezier(.32,.72,0,1);
+        --seg-track: rgba(118,118,128,.24); --seg-on: #636366;
+        /* Nav/dock material (the only translucency) */
+        --bar: rgba(20,20,22,.72);
+        --bar-stroke: rgba(255,255,255,.08);
       }
       @media (prefers-color-scheme: light) {
-        :root { --bg:#f2f2f7; --grouped:#fff; --grouped-hi:#d1d1d6; --fill:rgba(118,118,128,.12);
-          --sep:rgba(60,60,67,.29); --label:#000; --label2:rgba(60,60,67,.6); --label3:rgba(60,60,67,.3); --blue:#007aff; }
+        :root {
+          --bg:#f2f2f7; --card:#ffffff; --press:#e5e5ea; --sep:rgba(60,60,67,.22);
+          --label:#000; --label2:rgba(60,60,67,.6); --label3:rgba(60,60,67,.3); --blue:#007aff;
+          --bar: rgba(248,248,250,.8); --bar-stroke: rgba(0,0,0,.07);
+          --seg-track: rgba(118,118,128,.12); --seg-on: #ffffff;
+        }
       }
       * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
       html, body { height: 100%; background: var(--bg); color: var(--label); font-family: var(--font);
         -webkit-font-smoothing: antialiased; font-feature-settings: "tnum" 1; overscroll-behavior: none; }
-      body { display: flex; flex-direction: column; height: 100dvh;
-        padding: env(safe-area-inset-top) 0 0; }
+      body { display: flex; flex-direction: column; height: 100dvh; padding: env(safe-area-inset-top) 0 0; }
       .hidden { display: none !important; }
 
-      /* Large-title nav */
-      .nav { padding: 6px 20px 8px; display: flex; align-items: flex-end; gap: 10px; }
-      .nav h1 { font-size: 34px; font-weight: 700; letter-spacing: .37px; }
-      #status { margin-left: auto; margin-bottom: 6px; display: inline-flex; align-items: center; gap: 6px;
-        font-size: 13px; color: var(--label2); }
-      #status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--label3); }
-      #status.on .dot { background: #30d158; } #status.connecting .dot { background: #ff9f0a; }
+      /* Large-title nav (solid; thin material feel) */
+      .nav { padding: 10px 20px 6px; display: flex; align-items: center; gap: 10px; }
+      .nav h1 { font-size: 30px; font-weight: 700; letter-spacing: .36px; }
+      #status { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+        font-size: 12px; color: var(--label2); padding: 5px 11px; border-radius: 999px;
+        background: var(--card); border: .5px solid var(--bar-stroke); text-transform: lowercase; }
+      #status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--label3); }
+      #status.on .dot { background: #30d158; }
+      #status.connecting .dot { background: #ff9f0a; }
 
-      /* iOS search field */
+      /* Search — solid system fill pill */
       #searchbar { padding: 2px 16px 8px; }
-      .field { display: flex; align-items: center; gap: 7px; height: 38px; padding: 0 10px;
-        background: var(--fill); border-radius: var(--r-field); }
+      .field { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 11px;
+        border-radius: var(--r-field); background: var(--card); }
       .field svg { width: 16px; height: 16px; color: var(--label2); flex: 0 0 auto; }
-      .field input { flex: 1; background: transparent; border: none; outline: none; color: var(--label);
-        font: inherit; font-size: 17px; }
+      .field input { flex: 1; background: transparent; border: none; outline: none; color: var(--label); font: inherit; font-size: 17px; }
       .field input::placeholder { color: var(--label3); }
+      #searchclear { flex: 0 0 auto; width: 20px; height: 20px; border: none; border-radius: 50%;
+        background: var(--label3); color: var(--bg); font-size: 12px; line-height: 1; cursor: pointer; }
 
-      /* Connect (grouped form) */
-      #connect { padding: 8px 16px; }
-      #connect .blurb { color: var(--label2); font-size: 14px; line-height: 1.5; padding: 4px 4px 14px; }
-      #connect .group { background: var(--grouped); border-radius: var(--r-group); overflow: hidden; }
+      /* Type filter — iOS segmented control */
+      #filters { padding: 0 16px 8px; display: flex; gap: 2px; }
+      #filters .seg { flex: 1 1 0; display: flex; padding: 3px; gap: 2px;
+        border-radius: 11px; background: var(--seg-track); }
+      #filters button { flex: 1 1 0; border: none; cursor: pointer; padding: 6px 4px;
+        border-radius: 8px; background: transparent; color: var(--label); font: inherit;
+        font-size: 13px; font-weight: 590; letter-spacing: .1px;
+        transition: background .2s var(--spring), transform .14s var(--spring); }
+      #filters button:active { transform: scale(.93); }
+      #filters button.on { background: var(--seg-on); box-shadow: 0 1px 3px rgba(0,0,0,.16); }
+
+      /* Connect — centered, polished onboarding card */
+      #connect { flex: 1; display: flex; flex-direction: column; justify-content: center;
+        width: 100%; max-width: 400px; margin: 0 auto; padding: 16px 20px 40px; gap: 14px; }
+      #connect .hero { text-align: center; margin-bottom: 8px; }
+      #connect .appicon { width: 60px; height: 60px; margin: 0 auto 20px; border-radius: 15px;
+        background: var(--blue); display: grid; place-items: center;
+        box-shadow: 0 8px 22px -10px rgba(10,132,255,.7), inset 0 1px 0 rgba(255,255,255,.25); }
+      #connect .appicon svg { width: 32px; height: 32px; }
+      #connect .hero h2 { font-size: 27px; font-weight: 700; letter-spacing: -.4px; line-height: 1.18; }
+      #connect .hero p { color: var(--label2); font-size: 14.5px; line-height: 1.5; margin: 12px auto 0; max-width: 320px; }
+      #connect .group { background: var(--card); border-radius: var(--r-group); overflow: hidden; }
       #connect .group input { width: 100%; border: none; background: transparent; color: var(--label);
-        font: inherit; font-size: 17px; padding: 14px 16px; outline: none; }
+        font: inherit; font-size: 17px; padding: 15px 16px; outline: none; }
       #connect .group input:not(:last-child) { border-bottom: .5px solid var(--sep); }
-      #connect button { width: 100%; margin-top: 22px; border: none; border-radius: 14px; background: var(--blue);
-        color: #fff; font: inherit; font-size: 17px; font-weight: 600; padding: 15px; }
-      #connect button:active { opacity: .8; }
+      #connect button { width: 100%; border: none; border-radius: 14px; background: var(--blue);
+        color: #fff; font: inherit; font-size: 17px; font-weight: 600; padding: 15px;
+        transition: transform .1s, opacity .1s; }
+      #connect button:active { transform: scale(.98); opacity: .9; }
+      #connect .lock { display: flex; align-items: center; justify-content: center; gap: 6px;
+        font-size: 12.5px; color: var(--label3); margin-top: 4px; }
+      #connect .lock svg { width: 13px; height: 13px; }
 
-      /* Grouped list */
-      #list { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 16px calc(12px + env(safe-area-inset-bottom)); }
+      /* Drag-to-send overlay */
+      #droplay { position: fixed; inset: 0; z-index: 20; display: none; place-items: center;
+        background: rgba(0,0,0,.55); backdrop-filter: blur(8px); }
+      body.dragging #droplay { display: grid; }
+      #droplay .drop-card { padding: 28px 40px; border-radius: 20px; border: 2px dashed var(--blue);
+        background: var(--card); font-size: 18px; font-weight: 600; color: var(--label); }
+
+      /* Grouped list (solid cards, hairline separators) */
+      #list { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+        padding: 6px 16px calc(96px + env(safe-area-inset-bottom)); }
       #list::-webkit-scrollbar { width: 0; }
-      .sec { padding: 16px 6px 7px; font-size: 13px; color: var(--label2); }
-      .group { background: var(--grouped); border-radius: var(--r-group); overflow: hidden; margin-bottom: 4px; }
+      .sec { padding: 18px 8px 7px; font-size: 13px; color: var(--label2); }
+      .group { background: var(--card); border-radius: var(--r-group); overflow: hidden; margin-bottom: 8px; }
       .empty { text-align: center; color: var(--label3); padding: 70px 24px; font-size: 15px; line-height: 1.5; }
-      .cell { position: relative; display: flex; align-items: center; gap: 12px; padding: 9px 14px; min-height: 56px;
-        transition: background .15s var(--spring); }
-      .cell:active { background: var(--grouped-hi); }
+      .cell { position: relative; display: flex; align-items: center; gap: 12px; padding: 8px 14px; min-height: 56px;
+        transition: background .12s ease; }
+      .cell:active { background: var(--press); }
+      .cell.flash { animation: flashin .6s var(--spring); }
+      .cell.removing { opacity: 0; transform: translateX(36px);
+        transition: opacity .19s ease, transform .19s var(--spring); pointer-events: none; }
+      @keyframes flashin {
+        0% { background: rgba(10,132,255,.22); }
+        100% { background: transparent; }
+      }
+      /* Green acknowledgment pulse when a row is copied to the clipboard. */
+      .cell.copied { animation: copiedpulse .7s var(--spring); }
+      @keyframes copiedpulse {
+        0%, 30% { background: rgba(48,209,88,.26); }
+        100% { background: transparent; }
+      }
       .cell:not(:last-child)::after { content: ""; position: absolute; left: 58px; right: 0; bottom: 0; height: .5px; background: var(--sep); }
-      .leadicon { position: relative; flex: 0 0 auto; width: 32px; height: 32px; border-radius: var(--r-icon); display: grid; place-items: center; overflow: hidden; }
-      .leadicon svg { width: 19px; height: 19px; color: #fff; }
+      .leadicon { position: relative; flex: 0 0 auto; width: 30px; height: 30px; border-radius: var(--r-icon);
+        display: grid; place-items: center; overflow: hidden; }
+      .leadicon svg { width: 18px; height: 18px; color: #fff; }
       .leadicon img, .leadicon .swatch { width: 100%; height: 100%; object-fit: cover; }
-      .leadicon .favicon { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; padding: 6px; background: #fff; }
+      .leadicon .favicon { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; padding: 5px; background: #fff; }
       .body { flex: 1; min-width: 0; }
       .ptext { font-size: 16px; letter-spacing: -.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .ptext.mono { font-family: var(--mono); font-size: 14px; }
       .pmeta { margin-top: 1px; font-size: 13px; color: var(--label2); }
-      .pin { flex: 0 0 auto; width: 30px; height: 30px; border: none; background: transparent; color: var(--label3);
-        border-radius: 8px; display: grid; place-items: center; }
-      .pin svg { width: 18px; height: 18px; }
-      .pin.on { color: var(--blue); }
+      /* Tight action cluster (download · pin · trash) so they read as one
+         control group, not three items spread by the row's 12px gap. */
+      .actions { flex: 0 0 auto; display: flex; align-items: center; gap: 0; margin-right: -6px; }
+      .act.dl:active { color: var(--blue); }
+      .act { flex: 0 0 auto; width: 32px; height: 32px; border: none; background: transparent; color: var(--label3);
+        border-radius: 8px; display: grid; place-items: center; cursor: pointer;
+        transition: background .14s, color .14s, transform .14s var(--spring); }
+      .act svg { width: 18px; height: 18px; transition: transform .14s var(--spring); }
+      .act:hover { background: var(--press); color: var(--label2); }
+      .act:active { transform: scale(.82); background: var(--press); }
+      .act.pin.on { color: var(--blue); }
+      .act.del:active { color: #ff453a; background: rgba(255,69,58,.16); }
+      /* Satisfying spring "pop" when a clip is pinned (one-shot, set by JS). */
+      .act.pin.pop svg { animation: pinpop .46s var(--spring); }
+      @keyframes pinpop {
+        0% { transform: scale(.5); } 55% { transform: scale(1.38) rotate(-12deg); } 100% { transform: scale(1); }
+      }
+      /* Kill the grey mobile tap-flash + the 300ms delay so taps feel instant. */
+      button, .cell, .act { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 
-      /* Composer */
-      #composer { display: flex; gap: 8px; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); border-top: .5px solid var(--sep); }
-      #composer input { flex: 1; height: 40px; padding: 0 14px; border-radius: 20px; border: .5px solid var(--sep);
-        background: var(--grouped); color: var(--label); font: inherit; font-size: 16px; outline: none; }
-      #composer button { width: 40px; height: 40px; border: none; border-radius: 50%; background: var(--blue); color: #fff; font-size: 18px; }
+      /* Floating dock composer — the one place translucency belongs */
+      #composer { position: fixed; left: 12px; right: 12px; bottom: calc(10px + env(safe-area-inset-bottom));
+        display: flex; align-items: center; gap: 8px; padding: 7px; border-radius: 27px; z-index: 5;
+        background: var(--bar); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
+        border: .5px solid var(--bar-stroke); box-shadow: 0 8px 30px -8px rgba(0,0,0,.5); }
+      #composer input { flex: 1; height: 40px; padding: 0 16px; border-radius: 20px; border: none;
+        background: var(--card); color: var(--label); font: inherit; font-size: 16px; outline: none; }
+      #composer input::placeholder { color: var(--label3); }
+      #composer button { width: 40px; height: 40px; flex: 0 0 auto; border: none; border-radius: 50%;
+        background: var(--blue); color: #fff; font-size: 18px; transition: transform .12s var(--spring); }
+      #composer button:active { transform: scale(.9); }
+      #composer #attach { background: var(--card); color: var(--label); font-size: 24px; font-weight: 300; }
 
       /* Toast */
-      #toast { position: fixed; left: 50%; bottom: calc(92px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(10px);
-        background: var(--grouped-hi); color: var(--label); padding: 11px 20px; border-radius: 999px; font-size: 14px; font-weight: 500;
-        opacity: 0; transition: all .26s var(--spring); pointer-events: none; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
-      #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+      #toast { position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(10px) scale(.96);
+        background: var(--press); color: var(--label); padding: 10px 18px; border-radius: 999px; font-size: 14px; font-weight: 500;
+        opacity: 0; transition: all .24s var(--spring); pointer-events: none; z-index: 9; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+      #toast.show { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
     </style>
   </head>
   <body>
-    <div class="nav"><h1>Clipboard</h1><span id="status"><span class="dot"></span><span id="status-text">offline</span></span></div>
+    <div class="nav hidden" id="nav"><h1>Clipboard</h1><span id="status"><span class="dot"></span><span id="status-text">offline</span></span></div>
 
     <div id="connect">
-      <div class="blurb">Enter the same <b>account</b> and <b>passphrase</b> as your desktop. Clips are end-to-end encrypted — the relay never sees them.</div>
+      <div class="hero">
+        <div class="appicon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9 4.5h6V7H9z" fill="#fff" stroke="none"/></svg>
+        </div>
+        <h2>Your clipboard,<br>everywhere</h2>
+        <p>Enter the same account and passphrase as your desktop. Everything is end-to-end encrypted — the relay never sees your clips.</p>
+      </div>
       <div class="group">
         <input id="account" placeholder="Account" autocapitalize="off" autocorrect="off" spellcheck="false" />
         <input id="secret" type="password" placeholder="Passphrase" />
         <input id="relay" placeholder="Relay URL (optional)" autocapitalize="off" autocorrect="off" spellcheck="false" />
       </div>
       <button id="go">Connect</button>
+      <div class="lock">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+        End-to-end encrypted
+      </div>
     </div>
+    <div id="droplay"><div class="drop-card">Drop to send</div></div>
 
     <div id="searchbar" class="hidden">
       <div class="field">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
         <input id="search" placeholder="Search" autocapitalize="off" autocorrect="off" spellcheck="false" />
+        <button id="searchclear" class="hidden" aria-label="Clear">✕</button>
+      </div>
+    </div>
+
+    <div id="filters" class="hidden">
+      <div class="seg">
+        <button class="on" data-filter="all">All</button>
+        <button data-filter="text">Text</button>
+        <button data-filter="link">Links</button>
+        <button data-filter="image">Images</button>
+        <button data-filter="files">Files</button>
       </div>
     </div>
 
     <div id="list" class="hidden"></div>
 
     <div id="composer" class="hidden">
-      <input id="msg" placeholder="Send to your devices…" />
+      <button id="attach" aria-label="Attach files">+</button>
+      <input id="fileinput" type="file" multiple style="display:none" />
+      <input id="msg" placeholder="Message, paste, or ＋ to send files…" />
       <button id="send" aria-label="Send">↑</button>
     </div>
 

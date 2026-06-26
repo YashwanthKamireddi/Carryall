@@ -30,10 +30,39 @@ pub struct Ctx {
     pub store: Arc<Mutex<Store>>,
     pub blob_dir: PathBuf,
     pub outgoing: broadcast::Sender<Clip>,
+    /// Content-hash the monitor should ignore once — set right before we write
+    /// an incoming synced clip to the native clipboard, so we don't re-capture
+    /// and re-broadcast our own write (which would loop between devices).
+    pub suppress: Arc<Mutex<Option<String>>>,
+    /// Daemon start time (ms). Only clips created at/after this auto-apply to
+    /// the native clipboard — so a relay backlog replay on reconnect refills
+    /// history WITHOUT clobbering whatever is currently on your clipboard.
+    pub started: i64,
+    /// Recently-applied clip ids (bounded) — guards against double-apply when
+    /// the same clip arrives via multiple paths (relay + LAN) or a backlog
+    /// replay, without unbounded memory growth on a long-running daemon.
+    pub applied: Arc<Mutex<crate::proto::Dedup>>,
+}
+
+impl Ctx {
+    /// True if `id` was just applied by us and should be skipped by the monitor.
+    fn take_suppressed(&self, id: &str) -> bool {
+        let mut g = self.suppress.lock().unwrap();
+        if g.as_deref() == Some(id) {
+            *g = None;
+            return true;
+        }
+        false
+    }
 }
 
 /// Data directory (kept compatible with prior history at com.yk.clip).
 pub fn data_dir() -> PathBuf {
+    if let Ok(d) = std::env::var("CLIP_DATA_DIR") {
+        if !d.is_empty() {
+            return PathBuf::from(d);
+        }
+    }
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("com.yk.clip")
@@ -92,6 +121,9 @@ pub async fn run() {
         store: Arc::new(Mutex::new(store)),
         blob_dir,
         outgoing,
+        suppress: Arc::new(Mutex::new(None)),
+        started: now_ms(),
+        applied: Arc::new(Mutex::new(crate::proto::Dedup::new(8192))),
     };
 
     spawn_monitor(ctx.clone());
@@ -99,7 +131,31 @@ pub async fn run() {
 
     if let Some(cfg) = SyncConfig::load() {
         eprintln!("clip daemon: sync enabled (account={})", cfg.account);
-        spawn_sync(ctx.clone(), cfg);
+        // LAN peer-to-peer fast-path (direct, low-latency). Additive to relay.
+        let port = std::env::var("CLIP_LAN_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(crate::lan::DEFAULT_PORT);
+        let peer = std::env::var("CLIP_PEER").ok().filter(|s| !s.is_empty());
+        // Account fingerprint (not the name) scopes mDNS discovery to your devices.
+        let acct_fp =
+            clip_core::content_hash(clip_core::ContentKind::Binary, cfg.account.as_bytes())[..16]
+                .to_string();
+        crate::lan::spawn(
+            ctx.clone(),
+            cfg.key.clone(),
+            port,
+            peer,
+            cfg.device.clone(),
+            acct_fp,
+        );
+        // Relay path (cross-network). Set CLIP_RELAY_URL="" to run LAN-only.
+        let relay_disabled = matches!(std::env::var("CLIP_RELAY_URL"), Ok(s) if s.is_empty());
+        if relay_disabled {
+            eprintln!("clip daemon: relay disabled (LAN-only)");
+        } else {
+            spawn_sync(ctx.clone(), cfg);
+        }
     } else {
         eprintln!("clip daemon: local-only (set CLIP_ACCOUNT to enable sync)");
     }
@@ -152,6 +208,11 @@ impl ClipboardHandler for Handler {
         if self.last_id.as_deref() == Some(id.as_str()) {
             return;
         }
+        // Don't re-capture a clip we just wrote from an incoming sync.
+        if self.daemon.take_suppressed(&id) {
+            self.last_id = Some(id);
+            return;
+        }
         self.last_id = Some(id);
         self.daemon.ingest(nc);
     }
@@ -188,8 +249,11 @@ fn wayland_loop(daemon: Ctx) {
         if let Some(nc) = read_wayland() {
             let id = nc.dedup_id();
             if last_id.as_deref() != Some(id.as_str()) {
-                last_id = Some(id);
-                daemon.ingest(nc);
+                last_id = Some(id.clone());
+                // Skip clips we just wrote from an incoming sync.
+                if !daemon.take_suppressed(&id) {
+                    daemon.ingest(nc);
+                }
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -305,19 +369,48 @@ fn spawn_sync(ctx: Ctx, cfg: SyncConfig) {
 }
 
 async fn sync_connection(ctx: &Ctx, cfg: &SyncConfig, endpoint: &str) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use std::collections::HashMap;
+
     let (ws, _) = tokio_tungstenite::connect_async(endpoint)
         .await
         .map_err(|e| e.to_string())?;
     eprintln!("clip: sync connected");
     let (mut write, mut read) = ws.split();
     let mut outgoing = ctx.outgoing.subscribe();
+
+    // Clips waiting on their blob to finish transferring, keyed by blob_ref.
+    let mut pending: HashMap<String, Clip> = HashMap::new();
+    // Blob reassembly (shared, unit-tested logic).
+    let mut chunks = crate::proto::Reassembler::new();
+
     loop {
         tokio::select! {
             local = outgoing.recv() => match local {
                 Ok(clip) => {
+                    // Send the clip metadata frame (bare Clip JSON — PWA-compatible).
                     if let Ok(json) = serde_json::to_vec(&clip) {
                         if write.send(Message::Binary(encrypt(&cfg.key, &json))).await.is_err() {
                             return Err("send failed".into());
+                        }
+                    }
+                    // If it has a local blob (file/image content), stream it in chunks
+                    // so the real content lands on the other device.
+                    if let Some(ref_) = clip.blob_ref.as_deref() {
+                        if let Some(path) = crate::blobs::existing_path(&ctx.blob_dir, ref_) {
+                            if let Ok(bytes) = std::fs::read(&path) {
+                                let n = bytes.len().div_ceil(crate::proto::CHUNK).max(1);
+                                for (i, part) in bytes.chunks(crate::proto::CHUNK).enumerate() {
+                                    let frame = serde_json::json!({
+                                        "blob_chunk": ref_, "i": i, "n": n,
+                                        "b64": STANDARD.encode(part),
+                                    });
+                                    let ct = encrypt(&cfg.key, &serde_json::to_vec(&frame).unwrap());
+                                    if write.send(Message::Binary(ct)).await.is_err() {
+                                        return Err("send failed".into());
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -326,12 +419,69 @@ async fn sync_connection(ctx: &Ctx, cfg: &SyncConfig, endpoint: &str) -> Result<
             },
             inbound = read.next() => match inbound {
                 Some(Ok(Message::Binary(data))) => {
-                    if let Ok(plain) = decrypt(&cfg.key, &data) {
-                        if let Ok(clip) = serde_json::from_slice::<Clip>(&plain) {
-                            if let Ok(store) = ctx.store.lock() {
-                                let _ = store.upsert(&clip);
+                    let Ok(plain) = decrypt(&cfg.key, &data) else { continue };
+                    let Ok(val) = serde_json::from_slice::<serde_json::Value>(&plain) else { continue };
+
+                    // A delete event — remove the clip from history (cross-device delete).
+                    if let Some(id) = val.get("delete").and_then(|v| v.as_str()) {
+                        if let Ok(store) = ctx.store.lock() {
+                            let _ = store.delete(id, now_ms());
+                        }
+                        continue;
+                    }
+
+                    // A pin toggle — sync pinned state across devices.
+                    if let Some(id) = val.get("pin").and_then(|v| v.as_str()) {
+                        let pinned = val.get("pinned").and_then(|v| v.as_bool()).unwrap_or(true);
+                        if let Ok(store) = ctx.store.lock() {
+                            let _ = store.set_pinned(id, pinned);
+                        }
+                        continue;
+                    }
+
+                    if let Some(ref_) = val.get("blob_chunk").and_then(|v| v.as_str()) {
+                        // Already have this blob on disk and not mid-transfer → ignore
+                        // backlog re-sends (the `pending` check first avoids a stat on
+                        // the normal path, where the ref IS pending).
+                        if !pending.contains_key(ref_)
+                            && crate::blobs::existing_path(&ctx.blob_dir, ref_).is_some()
+                        {
+                            continue;
+                        }
+                        // A blob chunk — accumulate, then finalize when complete.
+                        let i = val.get("i").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                        let n = val.get("n").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                        let Some(b64) = val.get("b64").and_then(|v| v.as_str()) else { continue };
+                        let Ok(bytes) = STANDARD.decode(b64) else { continue };
+                        if let Some(whole) = chunks.add(ref_, i, n, bytes) {
+                            // Integrity: drop a blob whose content doesn't match its ref.
+                            if let Some(k) = pending.get(ref_).map(|c| c.kind) {
+                                if !crate::blobs::verify_ref(k, ref_, &whole) {
+                                    eprintln!("clip: blob integrity check failed ({ref_}); dropping");
+                                    pending.remove(ref_);
+                                    continue;
+                                }
+                            }
+                            crate::blobs::write(&ctx.blob_dir, ref_, &whole);
+                            if let Some(clip) = pending.remove(ref_) {
+                                finalize_apply(ctx, clip);
                             }
                         }
+                        continue;
+                    }
+
+                    // Otherwise it's a clip metadata frame.
+                    let Ok(clip) = serde_json::from_value::<Clip>(val) else { continue };
+                    if let Ok(store) = ctx.store.lock() {
+                        let _ = store.upsert(&clip);
+                    }
+                    match clip.blob_ref.as_deref() {
+                        // Needs a blob we don't have yet — wait for its chunks.
+                        Some(r) if crate::blobs::existing_path(&ctx.blob_dir, r).is_none() => {
+                            pending.insert(r.to_string(), clip);
+                        }
+                        // No blob, or blob already present — apply immediately.
+                        _ => finalize_apply(ctx, clip),
                     }
                 }
                 Some(Ok(Message::Close(_))) | None => return Ok(()),
@@ -339,5 +489,102 @@ async fn sync_connection(ctx: &Ctx, cfg: &SyncConfig, endpoint: &str) -> Result<
                 _ => {}
             },
         }
+    }
+}
+
+/// Materialize (for files) and write a received clip to the native clipboard,
+/// suppressing our own monitor from re-capturing the write.
+///
+/// Only *genuinely new* clips (created at/after daemon start) are written to the
+/// clipboard, and each only once per session — so a relay backlog replay on
+/// reconnect refills history without clobbering your current clipboard, and a
+/// clip arriving via multiple paths is never applied twice.
+pub(crate) fn finalize_apply(ctx: &Ctx, mut clip: Clip) {
+    use clip_core::ContentKind;
+
+    {
+        let mut applied = ctx.applied.lock().unwrap();
+        if !should_apply(clip.created_at, ctx.started, &clip.id, &mut applied) {
+            return; // backlog/historical or already-applied — don't touch clipboard
+        }
+    }
+
+    // For file-like clips, turn the synced blob into a real local file and point
+    // the clip at it so it pastes as an actual file.
+    if matches!(
+        clip.kind,
+        ContentKind::Files | ContentKind::Video | ContentKind::Audio
+    ) {
+        if let Some(ref_) = clip.blob_ref.clone() {
+            let paths = crate::blobs::materialize_archive(&ctx.blob_dir, &ref_);
+            if !paths.is_empty() {
+                let locals: Vec<String> = paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                clip.body = Some(locals.join("\n").into_bytes());
+                // Predict the id our monitor will derive from these paths so the
+                // suppress-guard matches and we don't re-broadcast.
+                let uris: Vec<String> = locals.iter().map(|l| format!("file://{l}")).collect();
+                if let Some(nc) = crate::capture::files_clip(uris) {
+                    *ctx.suppress.lock().unwrap() = Some(nc.dedup_id());
+                }
+            }
+        }
+    } else {
+        *ctx.suppress.lock().unwrap() = Some(clip.id.clone());
+    }
+    crate::apply::to_native_clipboard(&clip, &ctx.blob_dir);
+}
+
+/// Decide whether an incoming clip should be written to the native clipboard.
+///
+/// Pure so the anti-clobber / anti-double-apply rules are unit-tested:
+/// - clips older than the daemon start (`started`) are history/backlog replays —
+///   stored already, but must NOT overwrite the current clipboard;
+/// - each clip id applies at most once per session (dedup across relay + LAN).
+///
+/// Records the id in `applied` when it returns true.
+fn should_apply(
+    created_at: i64,
+    started: i64,
+    id: &str,
+    applied: &mut crate::proto::Dedup,
+) -> bool {
+    if created_at < started {
+        return false;
+    }
+    applied.insert_new(id) // false if a recent duplicate
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_apply;
+    use crate::proto::Dedup;
+
+    #[test]
+    fn applies_new_clip_once_then_dedups() {
+        let mut seen = Dedup::new(64);
+        let started = 1000;
+        // new clip (created after start) → applies
+        assert!(should_apply(1500, started, "a", &mut seen));
+        // same id again → deduped
+        assert!(!should_apply(1500, started, "a", &mut seen));
+    }
+
+    #[test]
+    fn skips_backlog_clips_older_than_start() {
+        let mut seen = Dedup::new(64);
+        let started = 1000;
+        // historical/backlog clip → not applied (no clipboard clobber)
+        assert!(!should_apply(50, started, "old", &mut seen));
+        // and it wasn't recorded as applied, so a later live copy still works
+        assert!(should_apply(2000, started, "new", &mut seen));
+    }
+
+    #[test]
+    fn clip_exactly_at_start_applies() {
+        let mut seen = Dedup::new(64);
+        assert!(should_apply(1000, 1000, "x", &mut seen));
     }
 }

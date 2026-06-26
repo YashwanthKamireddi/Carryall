@@ -1,6 +1,7 @@
-// Minimal service worker — enables PWA install ("Add to Home Screen") and
-// serves the app shell offline. Live clip data always comes over the WebSocket.
-const CACHE = "clip-shell-v1";
+// Service worker — enables PWA install ("Add to Home Screen") and offline use.
+// Network-first for the app shell so UI updates appear immediately (falling back
+// to cache only when offline). Live clip data always comes over the WebSocket.
+const CACHE = "clip-shell-v23";
 const SHELL = ["/", "/app.js", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (e) => {
@@ -9,7 +10,9 @@ self.addEventListener("install", (e) => {
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+    caches
+      .keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -17,7 +20,14 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (url.pathname === "/sync") return; // never intercept the WebSocket upgrade
+  // Network-first: always try fresh, cache the result, fall back to cache offline.
   e.respondWith(
-    caches.match(e.request).then((hit) => hit || fetch(e.request).catch(() => caches.match("/"))),
+    fetch(e.request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+        return res;
+      })
+      .catch(() => caches.match(e.request).then((hit) => hit || caches.match("/"))),
   );
 });

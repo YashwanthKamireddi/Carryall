@@ -40,6 +40,14 @@ CREATE TABLE IF NOT EXISTS clips (
 CREATE INDEX IF NOT EXISTS clips_created_at ON clips(created_at DESC);
 CREATE INDEX IF NOT EXISTS clips_kind ON clips(kind);
 
+-- Tombstones: ids of clips deleted on any device, with the deletion time, so a
+-- backlog replay on reconnect (same old created_at) can't resurrect them — while
+-- a genuine re-copy (newer created_at) is allowed back. Bounded (oldest pruned).
+CREATE TABLE IF NOT EXISTS tombstones (
+    id          TEXT PRIMARY KEY,
+    deleted_at  INTEGER NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS clips_fts
     USING fts5(preview, content='clips', content_rowid='rowid');
 
@@ -75,6 +83,10 @@ impl Store {
     /// it to the top instead of creating a duplicate.
     pub fn insert(&self, clip: NewClip, now_ms: i64) -> Result<Clip> {
         let stored = clip.into_clip(now_ms);
+        // A fresh local capture of this content is an intentional revival —
+        // drop any tombstone so it's allowed back into history + sync.
+        self.conn
+            .execute("DELETE FROM tombstones WHERE id = ?1", params![stored.id])?;
         self.conn.execute(
             r#"INSERT INTO clips (id, kind, preview, body, blob_ref, size, created_at, pinned)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)
@@ -97,12 +109,22 @@ impl Store {
     /// from another device). Preserves the incoming id/body/blob_ref; keeps the
     /// most recent `created_at` and the incoming `pinned` state.
     pub fn upsert(&self, c: &Clip) -> Result<()> {
+        // A clip deleted on another device must not be resurrected by a backlog
+        // replay (same, older created_at). But a genuine re-copy afterwards has a
+        // newer created_at — that clears the tombstone and is allowed back.
+        if let Some(deleted_at) = self.tombstoned_at(&c.id)? {
+            if c.created_at <= deleted_at {
+                return Ok(());
+            }
+            self.conn
+                .execute("DELETE FROM tombstones WHERE id = ?1", params![c.id])?;
+        }
         self.conn.execute(
             r#"INSERT INTO clips (id, kind, preview, body, blob_ref, size, created_at, pinned)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                ON CONFLICT(id) DO UPDATE SET
                  created_at = MAX(created_at, excluded.created_at),
-                 pinned = excluded.pinned"#,
+                 pinned = MAX(pinned, excluded.pinned)"#,
             params![
                 c.id,
                 c.kind.as_str(),
@@ -163,10 +185,33 @@ impl Store {
         Ok(())
     }
 
-    pub fn delete(&self, id: &str) -> Result<()> {
+    pub fn delete(&self, id: &str, now_ms: i64) -> Result<()> {
         self.conn
             .execute("DELETE FROM clips WHERE id = ?1", params![id])?;
+        // Record a tombstone (with deletion time) so a backlog replay can't bring
+        // it back, then bound the table to the most recent deletions.
+        self.conn.execute(
+            "INSERT INTO tombstones (id, deleted_at) VALUES (?1, ?2) \
+             ON CONFLICT(id) DO UPDATE SET deleted_at = excluded.deleted_at",
+            params![id, now_ms],
+        )?;
+        self.conn.execute(
+            "DELETE FROM tombstones WHERE id IN \
+             (SELECT id FROM tombstones ORDER BY deleted_at DESC LIMIT -1 OFFSET 4096)",
+            [],
+        )?;
         Ok(())
+    }
+
+    /// The deletion time of `id` if it's tombstoned (and not since revived).
+    pub fn tombstoned_at(&self, id: &str) -> Result<Option<i64>> {
+        self.conn
+            .query_row(
+                "SELECT deleted_at FROM tombstones WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
     }
 
     /// Remove all non-pinned clips (used by "clear history").
@@ -291,7 +336,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let a = store.insert(text_clip("old"), 1000).unwrap();
         store.insert(text_clip("new"), 9000).unwrap();
-        store.delete(&a.id).unwrap();
+        store.delete(&a.id, 9000).unwrap();
         assert_eq!(store.count().unwrap(), 1);
         store.insert(text_clip("ancient"), 500).unwrap();
         let removed = store.prune_older_than(8000).unwrap();
@@ -314,6 +359,41 @@ mod tests {
         clip.created_at = 2000;
         store.upsert(&clip).unwrap();
         assert_eq!(store.get(&clip.id).unwrap().unwrap().created_at, 5000);
+
+        // A clip re-broadcast (e.g. backlog replay) with pinned=false must NOT
+        // unpin it — unpinning only happens via the explicit set_pinned path.
+        clip.pinned = false;
+        store.upsert(&clip).unwrap();
+        assert!(store.get(&clip.id).unwrap().unwrap().pinned);
+        store.set_pinned(&clip.id, false).unwrap(); // explicit unpin still works
+        assert!(!store.get(&clip.id).unwrap().unwrap().pinned);
+    }
+
+    #[test]
+    fn tombstone_blocks_backlog_resurrection_but_recapture_revives() {
+        let store = Store::open_in_memory().unwrap();
+        let clip = store.insert(text_clip("secret"), 1000).unwrap();
+        store.delete(&clip.id, 2000).unwrap(); // deleted at t=2000
+        assert_eq!(store.tombstoned_at(&clip.id).unwrap(), Some(2000));
+
+        // A backlog replay (same old created_at) must NOT bring it back.
+        store.upsert(&clip).unwrap(); // clip.created_at == 1000 <= 2000
+        assert_eq!(store.count().unwrap(), 0);
+        assert!(store.get(&clip.id).unwrap().is_none());
+
+        // A genuine re-copy afterwards (newer created_at) clears the tombstone.
+        let mut later = clip.clone();
+        later.created_at = 3000;
+        store.upsert(&later).unwrap();
+        assert_eq!(store.count().unwrap(), 1);
+        assert!(store.tombstoned_at(&clip.id).unwrap().is_none());
+
+        // And a fresh local capture always revives, regardless of timing.
+        store.delete(&clip.id, 9000).unwrap();
+        let revived = store.insert(text_clip("secret"), 4000).unwrap();
+        assert_eq!(revived.id, clip.id);
+        assert_eq!(store.count().unwrap(), 1);
+        assert!(store.tombstoned_at(&clip.id).unwrap().is_none());
     }
 
     #[test]

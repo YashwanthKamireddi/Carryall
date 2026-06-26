@@ -17,14 +17,14 @@ serde_json = { workspace = true }
 
 # Native clipboard read/write + change monitoring (X11/Win/macOS).
 clipboard-rs = "0.3"
-# TUI
-ratatui = "0.29"
-crossterm = "0.28"
 # async sync client
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
 tokio-tungstenite = { version = "0.23", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 dirs = "5"
+base64 = "0.22"
+# LAN peer auto-discovery (zeroconf/mDNS). Best-effort; degrades to relay/manual.
+mdns-sd = "0.11"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Wayland-native clipboard (wlr-data-control).

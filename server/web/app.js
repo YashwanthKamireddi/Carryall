@@ -11,6 +11,15 @@ const dec = new TextDecoder();
 let ws = null, key = null, account = "", device = "";
 const clips = new Map(); // id -> clip (+ local `pinned`)
 let query = "";
+let filter = "all"; // type filter: all | text | link | image | files
+
+// Map a clip kind to a filter bucket (matches the segmented control).
+function filterBucket(kind) {
+  if (kind === "link") return "link";
+  if (kind === "image") return "image";
+  if (kind === "files" || kind === "video" || kind === "audio") return "files";
+  return "text"; // text, code, color, rich_text, binary
+}
 
 // ---------- crypto (identical scheme to the desktop) ----------
 async function deriveKey(secret, acct) {
@@ -38,16 +47,62 @@ async function sha256Hex(s) {
 
 // ---------- IndexedDB (per-account local history) ----------
 let db = null;
+const tombstones = new Map(); // id -> deletedAt (ms); blocks backlog resurrection
 function openDb(acct) {
   return new Promise((res) => {
-    const req = indexedDB.open("clip-" + acct, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore("clips", { keyPath: "id" });
+    const req = indexedDB.open("clip-" + acct, 3);
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains("clips")) d.createObjectStore("clips", { keyPath: "id" });
+      if (!d.objectStoreNames.contains("tombstones")) d.createObjectStore("tombstones");
+      // Full file/image bytes, keyed by blob_ref — so received files survive a
+      // reload/offline instead of depending on a relay backlog re-send.
+      if (!d.objectStoreNames.contains("blobs")) d.createObjectStore("blobs");
+    };
     req.onsuccess = () => res(req.result);
     req.onerror = () => res(null);
   });
 }
 function dbPut(clip) { try { db?.transaction("clips", "readwrite").objectStore("clips").put(clip); } catch {} }
 function dbDel(id) { try { db?.transaction("clips", "readwrite").objectStore("clips").delete(id); } catch {} }
+// Blob bytes are stored on disk (IndexedDB), loaded into RAM only on demand
+// (when a clip is opened) so a big history doesn't sit in memory.
+function dbPutBlob(ref, bytes) { try { db?.transaction("blobs", "readwrite").objectStore("blobs").put(bytes, ref); } catch {} }
+function dbDelBlob(ref) { try { if (ref) db?.transaction("blobs", "readwrite").objectStore("blobs").delete(ref); } catch {} }
+function dbGetBlob(ref) {
+  return new Promise((res) => {
+    if (!db || !ref) return res(null);
+    try {
+      const r = db.transaction("blobs", "readonly").objectStore("blobs").get(ref);
+      r.onsuccess = () => res(r.result ? new Uint8Array(r.result) : null);
+      r.onerror = () => res(null);
+    } catch { res(null); }
+  });
+}
+function dbBlobRefs() {
+  return new Promise((res) => {
+    if (!db) return res([]);
+    try {
+      const r = db.transaction("blobs", "readonly").objectStore("blobs").getAllKeys();
+      r.onsuccess = () => res(r.result || []);
+      r.onerror = () => res([]);
+    } catch { res([]); }
+  });
+}
+function dbTombstone(id, at) { try { db?.transaction("tombstones", "readwrite").objectStore("tombstones").put(at, id); } catch {} }
+function dbUntombstone(id) { try { db?.transaction("tombstones", "readwrite").objectStore("tombstones").delete(id); } catch {} }
+function dbTombstones() {
+  return new Promise((res) => {
+    if (!db) return res([]);
+    const store = db.transaction("tombstones", "readonly").objectStore("tombstones");
+    const kr = store.getAllKeys(), vr = store.getAll();
+    let keys = null, vals = null;
+    const done = () => { if (keys && vals) res(keys.map((k, i) => [k, vals[i]])); };
+    kr.onsuccess = () => { keys = kr.result || []; done(); };
+    vr.onsuccess = () => { vals = vr.result || []; done(); };
+    kr.onerror = vr.onerror = () => res([]);
+  });
+}
 function dbAll() {
   return new Promise((res) => {
     if (!db) return res([]);
@@ -73,96 +128,380 @@ const KIND_LABEL = { text: "Text", link: "Link", color: "Color", code: "Code", r
   image: "Image", files: "Files", video: "Video", audio: "Audio", binary: "Binary" };
 const svgIcon = (kind) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON[kind] || ICON.binary}</svg>`;
-const PIN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4h5l-1 6 3 2.5H7.5L10.5 10z"/><line x1="12" y1="15" x2="12" y2="20.5"/></svg>';
+// Refined SF-Symbol-style action glyphs.
+const PIN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v4"/><path d="M9 3h6l-.8 3.2a3 3 0 0 0 .9 2.9l1.4 1.3a1 1 0 0 1 .3.8v.3a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-.3a1 1 0 0 1 .3-.8l1.4-1.3a3 3 0 0 0 .9-2.9z"/></svg>';
+const PIN_FILL_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 3h6l-.85 3.4a3 3 0 0 0 .9 2.9l1.45 1.35a1 1 0 0 1 .35.76.6.6 0 0 1-.6.59H12.8V21a.8.8 0 0 1-1.6 0v-8H7.75a.6.6 0 0 1-.6-.59 1 1 0 0 1 .35-.76L8.95 9.3a3 3 0 0 0 .9-2.9z"/></svg>';
+const TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"/><path d="M7 7l.8 11.2A1.8 1.8 0 0 0 9.6 20h4.8a1.8 1.8 0 0 0 1.8-1.8L17 7"/></svg>';
+const DOWNLOAD_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>';
 
 // ---------- helpers ----------
 const bytesToStr = (arr) => (arr ? dec.decode(new Uint8Array(arr)) : "");
 const b64 = (arr) => { let s = ""; const u = new Uint8Array(arr); for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s); };
 const escapeHtml = (s) => { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; };
 function relTime(ms) {
+  if (typeof ms !== "number" || !isFinite(ms)) return ""; // guard NaN/undefined
   const s = Math.max(0, (Date.now() - ms) / 1000);
   if (s < 60) return "now"; if (s < 3600) return Math.floor(s / 60) + "m";
   if (s < 86400) return Math.floor(s / 3600) + "h"; return Math.floor(s / 86400) + "d";
 }
+/** Normalize a possibly-malformed kind to a known one. */
+const normKind = (k) => (KIND_LABEL[k] ? k : "binary");
 function toast(t) { const el = $("toast"); el.textContent = t; el.classList.add("show"); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("show"), 1400); }
+// A whisper of haptic feedback on tap (Android/most Chromium; iOS Safari ignores
+// it harmlessly — the spring animations carry the feel there).
+function haptic(p) { try { navigator.vibrate && navigator.vibrate(p); } catch {} }
 function setStatus(text, cls) { $("status").className = cls || ""; $("status-text").textContent = text; }
 
 // ---------- render ----------
+let flashId = null; // id of a just-arrived clip to pulse once (consumed by render)
+let popId = null; // id of a clip whose pin should spring-"pop" once (consumed by render)
 function render() {
   const list = $("list");
   const q = query.trim().toLowerCase();
   let arr = [...clips.values()];
+  if (filter !== "all") arr = arr.filter((c) => filterBucket(normKind(c.kind)) === filter);
   if (q) arr = arr.filter((c) => (c.preview || "").toLowerCase().includes(q));
   arr.sort((a, b) => b.created_at - a.created_at);
   const pinned = arr.filter((c) => c.pinned);
   const recent = arr.filter((c) => !c.pinned);
 
   if (!arr.length) {
-    list.innerHTML = `<div class="empty">${q ? "No matches." : "No clips yet.<br>Copy something on your desktop."}</div>`;
+    const msg = q ? "No matches." : filter !== "all" ? "Nothing here yet." : "No clips yet.<br>Copy something on your desktop.";
+    list.innerHTML = `<div class="empty">${msg}</div>`;
+    flashId = popId = null;
     return;
   }
   const group = (items) => `<div class="group">${items.map(cellHtml).join("")}</div>`;
   const section = (label, items) => (items.length ? `<div class="sec">${label}</div>` + group(items) : "");
   list.innerHTML = q ? group(arr) : section("Pinned", pinned) + section("Recent", recent);
+  flashId = popId = null; // one-shot: consumed by this render, never replays
 }
 function faviconUrl(u) {
-  try { return `https://www.google.com/s2/favicons?domain=${new URL(u).hostname}&sz=64`; }
+  // Tolerate scheme-less links (e.g. "www.x.com") so they still get a favicon.
+  try { return `https://www.google.com/s2/favicons?domain=${new URL(/^https?:\/\//i.test(u) ? u : "https://" + u).hostname}&sz=64`; }
   catch { return null; }
 }
 function cellHtml(c) {
-  const isImg = c.kind === "image" && c.body;
-  const fav = c.kind === "link" ? faviconUrl(c.preview) : null;
+  const kind = normKind(c.kind);
+  const isImg = kind === "image" && c.body;
+  const fav = kind === "link" ? faviconUrl(c.preview) : null;
   const inner = isImg ? `<img alt="" src="data:image/png;base64,${b64(c.body)}">`
-    : c.kind === "color" ? `<div class="swatch" style="background:${escapeHtml(c.preview)}"></div>`
+    : kind === "color" ? `<div class="swatch" style="background:${escapeHtml(c.preview)}"></div>`
     : fav ? `${svgIcon("link")}<img class="favicon" src="${fav}" onerror="this.style.display='none'">`
-    : svgIcon(c.kind);
-  return `<div class="cell" data-act="copy" data-id="${c.id}">
-      <div class="leadicon" style="background:var(--c-${c.kind})">${inner}</div>
+    : svgIcon(kind);
+  // File rows show a download affordance + readiness in the meta line. The age
+  // lives in its own span so it can tick live without re-rendering the list.
+  const label = KIND_LABEL[kind] ? KIND_LABEL[kind] + " · " : "";
+  let meta = `${label}<span class="age" data-t="${c.created_at}">${relTime(c.created_at)}</span>`;
+  if (FILE_KINDS.has(kind) && !hasBlob(c.blob_ref) && c.blob_ref) {
+    meta += " · receiving…"; // the download button itself signals "ready"
+  }
+  // Only offer the download affordance once the blob has actually arrived.
+  const actionGlyph = FILE_KINDS.has(kind) && hasBlob(c.blob_ref) ? DOWNLOAD_SVG : null;
+  const flash = c.id === flashId ? " flash" : "";
+  return `<div class="cell${flash}" data-act="open" data-id="${c.id}">
+      <div class="leadicon" style="background:var(--c-${kind})">${inner}</div>
       <div class="body">
-        <div class="ptext ${c.kind === "code" ? "mono" : ""}">${escapeHtml(c.preview)}</div>
-        <div class="pmeta">${KIND_LABEL[c.kind] || c.kind} · ${relTime(c.created_at)}</div>
+        <div class="ptext ${kind === "code" ? "mono" : ""}">${escapeHtml(c.preview || "")}</div>
+        <div class="pmeta">${meta}</div>
       </div>
-      <button class="pin ${c.pinned ? "on" : ""}" data-act="pin" data-id="${c.id}">${PIN_SVG}</button>
+      <div class="actions">
+        ${actionGlyph ? `<button class="act dl" data-act="open" data-id="${c.id}" aria-label="Download">${actionGlyph}</button>` : ""}
+        <button class="act pin ${c.pinned ? "on" : ""}${c.id === popId ? " pop" : ""}" data-act="pin" data-id="${c.id}" aria-label="Pin">${c.pinned ? PIN_FILL_SVG : PIN_SVG}</button>
+        <button class="act del" data-act="del" data-id="${c.id}" aria-label="Delete">${TRASH_SVG}</button>
+      </div>
     </div>`;
 }
 
 function ingest(clip, persist = true) {
+  // Reject malformed clips (no id or no usable content) so no junk rows appear.
+  if (!clip || !clip.id || (!clip.preview && !clip.body)) return;
+  if (typeof clip.created_at !== "number" || !isFinite(clip.created_at)) clip.created_at = Date.now();
+  // Deleted on a device: a stale backlog replay (older created_at) stays dead;
+  // a genuine re-copy afterwards (newer created_at) clears the tombstone.
+  if (tombstones.has(clip.id)) {
+    if (clip.created_at <= tombstones.get(clip.id)) return;
+    tombstones.delete(clip.id); dbUntombstone(clip.id);
+  }
+  clip.kind = normKind(clip.kind);
   const prev = clips.get(clip.id);
   if (prev?.pinned) clip.pinned = true; // keep local pin
+  if (!prev) flashId = clip.id; // pulse genuinely-new arrivals once
   clips.set(clip.id, clip);
   if (persist) dbPut(clip);
   render();
 }
 
-// ---------- actions ----------
-async function copyClip(c) {
-  const text = bytesToStr(c.body) || c.preview;
-  if (navigator.clipboard && window.isSecureContext) {
-    try {
-      if (c.kind === "image" && c.body) {
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": new Blob([new Uint8Array(c.body)], { type: "image/png" }) })]);
-      } else await navigator.clipboard.writeText(text);
-      toast("Copied"); return;
-    } catch {}
+// ---------- received blobs (file/image content reassembled from chunks) ----------
+const FILE_KINDS = new Set(["files", "video", "audio"]);
+const pendingBlobs = new Map(); // ref -> { parts:[], have, n }
+const blobs = new Map(); // ref -> Uint8Array (complete, in RAM)
+const persistedBlobRefs = new Set(); // refs whose bytes are saved in IndexedDB (may not be in RAM)
+
+// True if we have the full blob anywhere (RAM or on-disk) — used for the
+// download/copy affordance without forcing the bytes into memory.
+function hasBlob(ref) { return !!ref && (blobs.has(ref) || persistedBlobRefs.has(ref)); }
+// Fetch the full blob bytes, loading from IndexedDB into RAM on first use.
+async function getBlob(ref) {
+  if (!ref) return null;
+  if (blobs.has(ref)) return blobs.get(ref);
+  const bytes = await dbGetBlob(ref);
+  if (bytes) blobs.set(ref, bytes); // cache for repeat opens
+  return bytes;
+}
+// Record a completed blob: RAM + persisted to disk so it survives reload.
+function saveBlob(ref, bytes) { blobs.set(ref, bytes); dbPutBlob(ref, bytes); persistedBlobRefs.add(ref); }
+
+function onChunk(frame) {
+  const { blob_chunk: ref, i, n, b64 } = frame;
+  if (!ref || typeof n !== "number") return;
+  if (hasBlob(ref)) return; // already have the whole blob — ignore backlog re-sends
+  let e = pendingBlobs.get(ref);
+  if (!e) { e = { parts: new Array(n).fill(null), have: 0 }; pendingBlobs.set(ref, e); }
+  if (i < e.parts.length && e.parts[i] === null) {
+    const bin = atob(b64); const u = new Uint8Array(bin.length);
+    for (let k = 0; k < bin.length; k++) u[k] = bin.charCodeAt(k);
+    e.parts[i] = u; e.have++;
   }
-  if (c.kind === "image") { toast("Image copy needs HTTPS"); return; }
+  if (e.have === e.parts.length) {
+    let len = 0; for (const p of e.parts) len += p.length;
+    const whole = new Uint8Array(len); let off = 0;
+    for (const p of e.parts) { whole.set(p, off); off += p.length; }
+    saveBlob(ref, whole); pendingBlobs.delete(ref);
+    render(); // a file row may now be ready to download
+  }
+}
+
+// Decode the CLA1 archive → [{name, data}].
+function decodeArchive(u8) {
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  let o = 0;
+  if (u8.length < 8 || String.fromCharCode(u8[0], u8[1], u8[2], u8[3]) !== "CLA1") return null;
+  o = 4; const count = dv.getUint32(o, true); o += 4;
+  const out = [];
+  for (let k = 0; k < count; k++) {
+    const nlen = dv.getUint16(o, true); o += 2;
+    const name = dec.decode(u8.subarray(o, o + nlen)); o += nlen;
+    const dlen = Number(dv.getBigUint64(o, true)); o += 8;
+    out.push({ name, data: u8.subarray(o, o + dlen) }); o += dlen;
+  }
+  return out;
+}
+
+function downloadBlob(name, bytes, mime) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime || "application/octet-stream" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ---------- actions ----------
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); return true; } catch {}
+  }
   const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
   document.body.appendChild(ta); ta.select();
-  toast(document.execCommand("copy") ? "Copied" : "Couldn't copy");
-  document.body.removeChild(ta);
+  const ok = (() => { try { return document.execCommand("copy"); } catch { return false; } })();
+  document.body.removeChild(ta); return ok;
 }
-function togglePin(c) { c.pinned = !c.pinned; clips.set(c.id, c); dbPut(c); render(); toast(c.pinned ? "Pinned" : "Unpinned"); }
+
+// Returns true if the clip was COPIED to the clipboard (so the caller can give
+// a "copied" acknowledgment); false for downloads / not-yet-ready.
+async function openClip(c) {
+  // Files/video/audio → download the REAL file(s), not the path text.
+  if (FILE_KINDS.has(c.kind)) {
+    const whole = await getBlob(c.blob_ref);
+    if (!whole) { toast("Receiving file…"); return false; }
+    const entries = decodeArchive(whole);
+    if (entries && entries.length) {
+      entries.forEach((f) => downloadBlob(f.name, f.data));
+      toast(entries.length > 1 ? `Downloading ${entries.length} files` : "Downloading");
+    } else {
+      downloadBlob(c.preview || "file", whole); toast("Downloading");
+    }
+    return false;
+  }
+  // Image → copy/download the FULL-resolution blob (c.body is only the small
+  // preview thumbnail; the real image is the streamed blob). Fall back to the
+  // thumbnail only if the full blob hasn't finished arriving yet.
+  if (c.kind === "image" && (hasBlob(c.blob_ref) || c.body)) {
+    const full = await getBlob(c.blob_ref);
+    if (!full && c.blob_ref) { toast("Receiving image…"); return false; }
+    const bytes = full || new Uint8Array(c.body);
+    if (navigator.clipboard && window.isSecureContext && window.ClipboardItem) {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": new Blob([bytes], { type: "image/png" }) })]);
+        toast("Copied"); return true;
+      } catch {}
+    }
+    downloadBlob((c.preview || "image").replace(/\s.*$/, "") + ".png", bytes, "image/png");
+    toast("Downloading"); return false;
+  }
+  // Text-like → copy.
+  const ok = await copyText(bytesToStr(c.body) || c.preview);
+  toast(ok ? "Copied" : "Couldn't copy");
+  return ok;
+}
+
+async function togglePin(c) {
+  c.pinned = !c.pinned; clips.set(c.id, c); dbPut(c);
+  if (c.pinned) popId = c.id; // spring-pop the pin on (one-shot, consumed by render)
+  haptic(c.pinned ? 14 : 8);
+  render(); toast(c.pinned ? "Pinned" : "Unpinned");
+  if (ws?.readyState === 1 && key) { try { ws.send(await encryptClip({ pin: c.id, pinned: c.pinned })); } catch {} }
+}
+function applyPin(id, pinned) {
+  const c = clips.get(id); if (!c || !!c.pinned === !!pinned) return;
+  c.pinned = !!pinned; clips.set(id, c); dbPut(c); render();
+}
+function forgetBlob(ref) {
+  if (!ref) return;
+  blobs.delete(ref); persistedBlobRefs.delete(ref); dbDelBlob(ref);
+}
+async function deleteClip(c) {
+  const at = Date.now();
+  clips.delete(c.id); dbDel(c.id); forgetBlob(c.blob_ref);
+  tombstones.set(c.id, at); dbTombstone(c.id, at); render(); toast("Deleted");
+  // Propagate the delete to your other devices (desktop daemon + other phones).
+  if (ws?.readyState === 1 && key) { try { ws.send(await encryptClip({ delete: c.id })); } catch {} }
+}
+function applyDelete(id) {
+  tombstones.set(id, Date.now()); dbTombstone(id, Date.now());
+  if (!clips.has(id)) return;
+  const c = clips.get(id); clips.delete(id); dbDel(id);
+  forgetBlob(c?.blob_ref); render();
+}
+
+// A lone URL (no surrounding whitespace) should sync as a link, matching how the
+// desktop classifier tags copied links — so it shows a favicon, not plain text.
+function isUrl(s) {
+  const t = s.trim();
+  if (/\s/.test(t)) return false;
+  return /^https?:\/\/[^\s]+\.[^\s]+$/i.test(t) || /^www\.[^\s]+\.[^\s]+$/i.test(t);
+}
 
 async function send() {
   const text = $("msg").value;
   if (!text || ws?.readyState !== 1) return;
+  haptic(10);
+  const kind = isUrl(text) ? "link" : "text";
   const body = [...enc.encode(text)];
-  const clip = { id: "web-" + (await sha256Hex("text\0" + text)), kind: "text",
+  const clip = { id: "web-" + (await sha256Hex(kind + "\0" + text)), kind,
     preview: text.length > 400 ? text.slice(0, 400) + "…" : text, body, blob_ref: null,
     size: body.length, created_at: Date.now(), pinned: false };
   ws.send(await encryptClip(clip));
   ingest(clip);
   $("msg").value = "";
+}
+
+const CHUNK = 256 * 1024; // larger chunks = far fewer encrypt/encode round-trips (faster uploads)
+
+// Build the CLA1 archive (same format the daemon packs/unpacks):
+// "CLA1" | u32 count | [u16 nameLen | name | u64 dataLen | data]*
+function buildArchive(items) {
+  let total = 4 + 4;
+  for (const it of items) total += 2 + new TextEncoder().encode(it.name).byteLength + 8 + it.data.byteLength;
+  const buf = new Uint8Array(total);
+  const dv = new DataView(buf.buffer);
+  let o = 0;
+  buf.set([67, 76, 65, 49], o); o += 4;            // "CLA1"
+  dv.setUint32(o, items.length, true); o += 4;
+  for (const it of items) {
+    const nb = new TextEncoder().encode(it.name);
+    dv.setUint16(o, nb.byteLength, true); o += 2;
+    buf.set(nb, o); o += nb.byteLength;
+    dv.setBigUint64(o, BigInt(it.data.byteLength), true); o += 8;
+    buf.set(it.data, o); o += it.data.byteLength;
+  }
+  return buf;
+}
+
+// Fast base64 of a byte chunk (process in blocks to avoid huge call stacks).
+function b64encode(u8) {
+  let s = "";
+  const STEP = 0x8000;
+  for (let i = 0; i < u8.length; i += STEP) s += String.fromCharCode.apply(null, u8.subarray(i, i + STEP));
+  return btoa(s);
+}
+
+// Stream a blob (already-built bytes) to peers as chunk frames after its clip.
+async function streamBlob(ref, bytes) {
+  const n = Math.max(1, Math.ceil(bytes.byteLength / CHUNK));
+  for (let i = 0; i < n; i++) {
+    const part = bytes.subarray(i * CHUNK, (i + 1) * CHUNK);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const frame = { blob_chunk: ref, i, n, b64: b64encode(part) };
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(frame))));
+    const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12);
+    ws.send(out);
+  }
+}
+
+// Downscaled PNG thumbnail (+ real dimensions) for an image file.
+async function imageThumb(file) {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, 400 / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale)), h = Math.max(1, Math.round(bmp.height * scale));
+  const c = new OffscreenCanvas(w, h);
+  c.getContext("2d").drawImage(bmp, 0, 0, w, h);
+  const blob = await c.convertToBlob({ type: "image/png" });
+  return { bytes: new Uint8Array(await blob.arrayBuffer()), w: bmp.width, h: bmp.height };
+}
+
+// Send one image as a real IMAGE clip (thumbnail inline, full image streamed),
+// so it shows as an image and pastes as an image on the desktop.
+async function sendImage(file) {
+  const full = new Uint8Array(await file.arrayBuffer());
+  let body = [], preview = file.name || "Image";
+  try { const t = await imageThumb(file); body = [...t.bytes]; preview = `Image · ${t.w}×${t.h}`; } catch {}
+  const ref = "img-" + (await sha256Hex(b64encode(full)));
+  const clip = { id: ref, kind: "image", preview, body, blob_ref: ref, size: full.byteLength, created_at: Date.now(), pinned: false };
+  saveBlob(ref, full); // so our own list can act on it too (and survive reload)
+  ws.send(await encryptClip(clip));
+  await streamBlob(ref, full);
+  ingest(clip);
+}
+
+// Send non-image files bundled as one archive (real files on the other side).
+async function sendFiles(files) {
+  const items = await Promise.all(files.map(async (f) => ({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) })));
+  const archive = buildArchive(items);
+  const ref = "f-" + (await sha256Hex(b64encode(archive)));
+  // Show the actual names, not a vague "2 files", so the row is identifiable.
+  const names = files.map((f) => f.name);
+  let preview = names.join(", ");
+  if (preview.length > 48) preview = `${names[0]} +${names.length - 1} more`;
+  const clip = { id: ref, kind: "files", preview, body: [...enc.encode(files.map((f) => f.name).join("\n"))],
+    blob_ref: ref, size: archive.byteLength, created_at: Date.now(), pinned: false };
+  saveBlob(ref, archive);
+  ws.send(await encryptClip(clip));
+  await streamBlob(ref, archive);
+  ingest(clip);
+}
+
+// Size caps mirror the desktop daemon (cli/src/blobs.rs): full-quality transfer,
+// but bounded so a huge pick can't blow up the tab's memory silently.
+const MAX_FILE_BYTES = 256 * 1024 * 1024; // per file
+const MAX_TOTAL_BYTES = 1024 * 1024 * 1024; // per multi-file selection
+const fmtMB = (b) => (b / 1048576).toFixed(b < 10485760 ? 1 : 0) + " MB";
+
+// Dispatch a selection: images send as images, the rest bundle as files.
+async function sendAttachments(fileList) {
+  let all = [...fileList];
+  if (!all.length || ws?.readyState !== 1) return;
+  // Reject individually-too-big files up front with a clear message.
+  const toobig = all.filter((f) => f.size > MAX_FILE_BYTES);
+  all = all.filter((f) => f.size <= MAX_FILE_BYTES);
+  if (toobig.length) toast(`${toobig.length === 1 ? `"${toobig[0].name}"` : `${toobig.length} files`} too large (max ${fmtMB(MAX_FILE_BYTES)})`);
+  if (!all.length) return;
+  if (all.reduce((s, f) => s + f.size, 0) > MAX_TOTAL_BYTES) { toast(`Selection too large (max ${fmtMB(MAX_TOTAL_BYTES)})`); return; }
+  const images = all.filter((f) => f.type.startsWith("image/"));
+  const others = all.filter((f) => !f.type.startsWith("image/"));
+  toast(`Sending ${all.length} item${all.length > 1 ? "s" : ""}…`);
+  for (const img of images) await sendImage(img);
+  if (others.length) await sendFiles(others);
+  toast("Sent");
 }
 
 // ---------- connection ----------
@@ -173,7 +512,17 @@ function openWs(url) {
   ws.onopen = () => setStatus("synced", "on");
   ws.onclose = () => { setStatus("reconnecting…", "connecting"); setTimeout(() => openWs(url), 2000); };
   ws.onerror = () => setStatus("error", "");
-  ws.onmessage = async (e) => { try { ingest(await decryptFrame(e.data)); } catch {} };
+  ws.onmessage = async (e) => {
+    try {
+      const u = new Uint8Array(e.data);
+      const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: u.slice(0, 12) }, key, u.slice(12));
+      const obj = JSON.parse(dec.decode(pt));
+      if (obj && obj.blob_chunk) onChunk(obj); // file/image content
+      else if (obj && obj.delete) applyDelete(obj.delete); // remote delete
+      else if (obj && obj.pin) applyPin(obj.pin, obj.pinned); // remote pin toggle
+      else ingest(obj); // clip metadata
+    } catch {}
+  };
 }
 
 async function connect() {
@@ -194,10 +543,14 @@ async function connect() {
 
   key = await deriveKey(secret, account);
   db = await openDb(account);
-  (await dbAll()).forEach((c) => clips.set(c.id, c)); // load saved history (offline-ready)
+  (await dbTombstones()).forEach(([id, at]) => tombstones.set(id, at)); // deleted ids stay dead
+  (await dbBlobRefs()).forEach((ref) => persistedBlobRefs.add(ref)); // know which files we still have (bytes loaded on demand)
+  (await dbAll()).forEach((c) => { if (!tombstones.has(c.id)) clips.set(c.id, c); }); // load saved history (offline-ready)
 
   $("connect").classList.add("hidden");
+  $("nav").classList.remove("hidden");
   $("searchbar").classList.remove("hidden");
+  $("filters").classList.remove("hidden");
   $("list").classList.remove("hidden");
   $("composer").classList.remove("hidden");
   render();
@@ -208,15 +561,72 @@ async function connect() {
 $("go").onclick = connect;
 $("send").onclick = send;
 $("msg").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
-$("search").addEventListener("input", (e) => { query = e.target.value; render(); });
+$("filters").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-filter]");
+  if (!btn || btn.dataset.filter === filter) return;
+  haptic(6);
+  filter = btn.dataset.filter;
+  for (const b of $("filters").querySelectorAll("button")) b.classList.toggle("on", b === btn);
+  render();
+});
+$("attach").onclick = () => { haptic(8); $("fileinput").click(); };
+$("fileinput").addEventListener("change", (e) => {
+  if (e.target.files?.length) sendAttachments(e.target.files);
+  e.target.value = ""; // allow re-selecting the same file
+});
+
+// Paste a file/image straight into the composer (like ChatGPT/Gemini) — no need
+// to open the file picker. Pasted plain text still types into the box.
+$("msg").addEventListener("paste", (e) => {
+  const files = e.clipboardData?.files;
+  if (files && files.length) { e.preventDefault(); sendAttachments(files); }
+});
+// Drag-and-drop files anywhere on the window to send them.
+document.addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("dragging"); });
+document.addEventListener("dragleave", (e) => { if (e.relatedTarget === null) document.body.classList.remove("dragging"); });
+document.addEventListener("drop", (e) => {
+  e.preventDefault(); document.body.classList.remove("dragging");
+  if (e.dataTransfer?.files?.length && ws?.readyState === 1) sendAttachments(e.dataTransfer.files);
+});
+$("search").addEventListener("input", (e) => {
+  query = e.target.value;
+  $("searchclear").classList.toggle("hidden", !query);
+  render();
+});
+$("searchclear").onclick = () => {
+  query = ""; $("search").value = ""; $("searchclear").classList.add("hidden");
+  render(); $("search").focus();
+};
 $("list").addEventListener("click", (e) => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   const c = clips.get(el.dataset.id); if (!c) return;
-  if (el.dataset.act === "copy") copyClip(c);
+  if (el.dataset.act === "open") {
+    haptic(8);
+    const cell = el.closest(".cell");
+    openClip(c).then((copied) => {
+      if (copied && cell) { cell.classList.add("copied"); setTimeout(() => cell.classList.remove("copied"), 700); }
+    });
+  }
   else if (el.dataset.act === "pin") togglePin(c);
+  else if (el.dataset.act === "del") {
+    // Swipe-and-fade the row out before it leaves the list (feels native).
+    haptic([5, 24, 5]);
+    const cell = el.closest(".cell");
+    if (cell) { cell.classList.add("removing"); setTimeout(() => deleteClip(c), 190); }
+    else deleteClip(c);
+  }
 });
 $("account").value = localStorage.getItem("clip.account") || "";
 $("secret").value = localStorage.getItem("clip.secret") || "";
 $("relay").value = localStorage.getItem("clip.relay") || "";
 if ($("account").value && $("secret").value) connect();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+// Keep relative timestamps fresh ("now" → "2m" → "1h") without re-rendering the
+// list — update only the age spans in place, so nothing flickers or loses scroll.
+setInterval(() => {
+  for (const el of document.querySelectorAll(".age[data-t]")) {
+    const s = relTime(+el.dataset.t);
+    if (el.textContent !== s) el.textContent = s;
+  }
+}, 30000);
