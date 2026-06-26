@@ -52,9 +52,11 @@ fn externalize_image(dir: &Path, mut nc: NewClip) -> NewClip {
     nc
 }
 
-/// Stage one or more selected files into a single content-addressed archive
-/// blob, so a multi-file selection syncs as real files. Folders are skipped
-/// (no recursion yet). `body` keeps the original paths for local paste.
+/// Stage one or more selected files/folders into a single content-addressed
+/// archive blob, so a multi-file selection syncs as real files. Folders are
+/// walked recursively; each entry's name is its path relative to the selection
+/// (forward-slashed) so the receiver can rebuild the structure. `body` keeps the
+/// original paths for local paste.
 fn stage_file(dir: &Path, mut nc: NewClip) -> NewClip {
     let paths: Vec<String> = nc
         .body
@@ -71,27 +73,18 @@ fn stage_file(dir: &Path, mut nc: NewClip) -> NewClip {
     let mut total: u64 = 0;
     for p in &paths {
         let path = Path::new(p);
-        let Ok(meta) = fs::metadata(path) else {
-            continue;
-        };
-        if !meta.is_file() || meta.len() > MAX_BLOB_BYTES {
-            continue; // skip dirs / oversized files
-        }
-        total += meta.len();
-        if total > MAX_ARCHIVE_BYTES {
-            return nc; // selection too big to content-sync
-        }
-        let name = path
+        // The selection's own basename is the entry-name prefix (so a folder
+        // keeps its name and structure on the other side).
+        let base = path
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "file".into());
-        match fs::read(path) {
-            Ok(bytes) => entries.push((name, bytes)),
-            Err(_) => continue,
+        if collect_into_archive(path, &base, &mut entries, &mut total).is_err() {
+            return nc; // selection too big to content-sync
         }
     }
     if entries.is_empty() {
-        return nc; // nothing content-syncable (e.g. folders only)
+        return nc; // nothing content-syncable (e.g. empty folders only)
     }
 
     let archive = encode_archive(&entries);
@@ -104,6 +97,47 @@ fn stage_file(dir: &Path, mut nc: NewClip) -> NewClip {
     nc.blob_ref = Some(id);
     nc.size = total;
     nc
+}
+
+/// Recursively add `path` (a file or directory) to `entries`, naming each file
+/// by `rel` (its path relative to the selection root, forward-slashed). Returns
+/// `Err` only if the running `total` would exceed `MAX_ARCHIVE_BYTES`; oversized
+/// individual files and unreadable entries are skipped, not fatal.
+fn collect_into_archive(
+    path: &Path,
+    rel: &str,
+    entries: &mut Vec<(String, Vec<u8>)>,
+    total: &mut u64,
+) -> Result<(), ()> {
+    let Ok(meta) = fs::metadata(path) else {
+        return Ok(()); // unreadable / broken symlink — skip
+    };
+    if meta.is_dir() {
+        let Ok(rd) = fs::read_dir(path) else {
+            return Ok(());
+        };
+        // Deterministic order so the same folder hashes to the same archive.
+        let mut children: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+        children.sort();
+        for child in children {
+            let name = child.file_name().map(|s| s.to_string_lossy().into_owned());
+            let Some(name) = name else { continue };
+            let child_rel = format!("{rel}/{name}");
+            collect_into_archive(&child, &child_rel, entries, total)?;
+        }
+        return Ok(());
+    }
+    if !meta.is_file() || meta.len() > MAX_BLOB_BYTES {
+        return Ok(()); // skip oversized individual files / non-regular entries
+    }
+    if *total + meta.len() > MAX_ARCHIVE_BYTES {
+        return Err(()); // selection too big to content-sync
+    }
+    if let Ok(bytes) = fs::read(path) {
+        *total += meta.len();
+        entries.push((rel.to_string(), bytes));
+    } // unreadable — skip
+    Ok(())
 }
 
 // ---- multi-file archive container (LE, no external deps) ----
@@ -194,14 +228,38 @@ pub fn materialize_archive(dir: &Path, blob_ref: &str) -> Vec<PathBuf> {
     let _ = fs::create_dir_all(&recv);
     let mut out = Vec::new();
     for (name, data) in entries {
-        let safe = name.rsplit(['/', '\\']).next().unwrap_or("file");
-        let safe = if safe.is_empty() { "file" } else { safe };
-        let path = recv.join(safe);
+        let Some(path) = safe_join(&recv, &name) else {
+            continue; // name resolved outside recv (traversal) — skip
+        };
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent); // rebuild folder structure
+        }
         if fs::write(&path, &data).is_ok() {
             out.push(path);
         }
     }
     out
+}
+
+/// Join an archive entry name under `base`, rebuilding sub-folders but rejecting
+/// any path-traversal: absolute paths, `..`, drive prefixes, etc. Returns `None`
+/// if nothing safe remains.
+fn safe_join(base: &Path, name: &str) -> Option<PathBuf> {
+    let mut out = base.to_path_buf();
+    let mut added = false;
+    for comp in name.split(['/', '\\']) {
+        // Drop empty, current-dir, parent-dir, and any component with a drive/colon.
+        if comp.is_empty() || comp == "." || comp == ".." || comp.contains(':') {
+            continue;
+        }
+        out.push(comp);
+        added = true;
+    }
+    if added {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 fn png_path(dir: &Path, id: &str) -> PathBuf {
@@ -267,5 +325,58 @@ mod tests {
         assert!(names.contains(&"two.pdf".to_string()));
         assert_eq!(fs::read(dir.join("received/one.txt")).unwrap(), b"first");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn folder_packs_recursively_and_rebuilds_structure() {
+        let dir = std::env::temp_dir().join(format!("clip-folder-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        // Build a source folder: proj/{readme.txt, src/main.rs}
+        let proj = dir.join("proj");
+        fs::create_dir_all(proj.join("src")).unwrap();
+        fs::write(proj.join("readme.txt"), b"hello").unwrap();
+        fs::write(proj.join("src/main.rs"), b"fn main(){}").unwrap();
+
+        // Stage the folder (as the clipboard would deliver its path in body).
+        let nc = NewClip {
+            kind: ContentKind::Files,
+            preview: "proj".into(),
+            body: Some(proj.to_string_lossy().as_bytes().to_vec()),
+            blob_ref: None,
+            size: 0,
+            id: None,
+        };
+        let blob_root = dir.join("blobs");
+        let staged = stage_file(&blob_root, nc);
+        let blob_ref = staged.blob_ref.expect("folder should produce an archive");
+
+        // Materialize on the "receiver" and confirm the structure is rebuilt.
+        let paths = materialize_archive(&blob_root, &blob_ref);
+        assert_eq!(paths.len(), 2, "both files unpacked");
+        assert_eq!(
+            fs::read(blob_root.join("received/proj/readme.txt")).unwrap(),
+            b"hello"
+        );
+        assert_eq!(
+            fs::read(blob_root.join("received/proj/src/main.rs")).unwrap(),
+            b"fn main(){}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn safe_join_blocks_path_traversal() {
+        let base = Path::new("/tmp/recv");
+        // Traversal / absolute attempts resolve safely under base or are rejected.
+        assert_eq!(safe_join(base, "../../etc/passwd"), Some(base.join("etc/passwd")));
+        assert_eq!(safe_join(base, "/etc/passwd"), Some(base.join("etc/passwd")));
+        assert_eq!(safe_join(base, "a/../../b"), Some(base.join("a/b")));
+        assert_eq!(safe_join(base, "ok/sub/file.txt"), Some(base.join("ok/sub/file.txt")));
+        assert_eq!(safe_join(base, "C:\\Windows\\x"), Some(base.join("Windows/x")));
+        assert_eq!(safe_join(base, "../.."), None); // nothing safe remains
+        // critically, no result ever escapes base
+        for n in ["../../etc/passwd", "/etc/passwd", "a/../../b", "C:\\Windows\\x"] {
+            assert!(safe_join(base, n).unwrap().starts_with(base));
+        }
     }
 }

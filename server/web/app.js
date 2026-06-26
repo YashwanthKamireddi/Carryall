@@ -311,9 +311,12 @@ function decodeArchive(u8) {
 }
 
 function downloadBlob(name, bytes, mime) {
+  // Folder entries arrive with a relative path (e.g. "proj/src/main.rs"); a
+  // browser download is a flat file, so use just the basename for a clean name.
+  const base = String(name || "file").split(/[/\\]/).pop() || "file";
   const url = URL.createObjectURL(new Blob([bytes], { type: mime || "application/octet-stream" }));
   const a = document.createElement("a");
-  a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  a.href = url; a.download = base; document.body.appendChild(a); a.click();
   a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
