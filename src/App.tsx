@@ -42,6 +42,22 @@ export default function App() {
   let inputRef: HTMLInputElement | undefined;
   let listRef: HTMLDivElement | undefined;
 
+  // Gliding selection highlight — slides between rows instead of snapping.
+  const [hl, setHl] = createSignal({ top: 0, height: 0, show: false });
+  const syncHighlight = () => {
+    const row = listRef?.querySelector<HTMLElement>(`[data-idx="${selected()}"]`);
+    if (row && clips().length) {
+      setHl({ top: row.offsetTop, height: row.offsetHeight, show: true });
+    } else {
+      setHl((h) => ({ ...h, show: false }));
+    }
+  };
+  createEffect(() => {
+    selected();
+    clips();
+    requestAnimationFrame(syncHighlight);
+  });
+
   const refresh = async (q: string) => {
     const result = q.trim() ? await searchClips(q) : await listClips();
     setClips(result);
@@ -158,6 +174,11 @@ export default function App() {
       </div>
 
       <div class="list" ref={listRef}>
+        <div
+          class="hl"
+          classList={{ show: hl().show }}
+          style={{ top: `${hl().top}px`, height: `${hl().height}px` }}
+        />
         <Show
           when={clips().length > 0}
           fallback={
