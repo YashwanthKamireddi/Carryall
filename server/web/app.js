@@ -9,6 +9,9 @@ const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 let ws = null, key = null, account = "", device = "";
+// Wrong-passphrase detection: every incoming frame fails to decrypt, so surface
+// it instead of looking "synced" forever with nothing appearing.
+let decryptOk = 0, decryptFail = 0, pwWarned = false;
 const clips = new Map(); // id -> clip (+ local `pinned`)
 let query = "";
 let filter = "all"; // type filter: all | text | link | image | files
@@ -354,7 +357,10 @@ async function openClip(c) {
         toast("Copied"); return true;
       } catch {}
     }
-    downloadBlob((c.preview || "image").replace(/\s.*$/, "") + ".png", bytes, "image/png");
+    // Clean filename: drop the " · 1920×1080" suffix and any existing image
+    // extension so we don't end up with e.g. "photo.png.png".
+    const base = (c.preview || "image").replace(/\s*·.*$/, "").replace(/\.(png|jpe?g|gif|webp|bmp)$/i, "").trim() || "image";
+    downloadBlob(base + ".png", bytes, "image/png");
     toast("Downloading"); return false;
   }
   // Text-like → copy.
@@ -564,15 +570,28 @@ function openWs(url) {
   ws.onclose = () => { setStatus("reconnecting…", "connecting"); setTimeout(() => openWs(url), 2000); };
   ws.onerror = () => setStatus("error", "");
   ws.onmessage = async (e) => {
+    let pt;
     try {
       const u = new Uint8Array(e.data);
-      const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: u.slice(0, 12) }, key, u.slice(12));
+      pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: u.slice(0, 12) }, key, u.slice(12));
+    } catch {
+      // Decrypt failed — almost always a passphrase/account mismatch. Warn once
+      // after a few consecutive failures with nothing ever decrypting.
+      if (++decryptFail >= 3 && decryptOk === 0 && !pwWarned) {
+        pwWarned = true;
+        setStatus("can't decrypt", "");
+        toast("Can't decrypt — check your account & passphrase match your desktop");
+      }
+      return;
+    }
+    decryptOk++;
+    try {
       const obj = JSON.parse(dec.decode(pt));
       if (obj && obj.blob_chunk) onChunk(obj); // file/image content
       else if (obj && obj.delete) applyDelete(obj.delete); // remote delete
       else if (obj && obj.pin) applyPin(obj.pin, obj.pinned); // remote pin toggle
       else ingest(obj); // clip metadata
-    } catch {}
+    } catch {} // a single malformed frame shouldn't kill the stream
   };
 }
 
@@ -592,6 +611,7 @@ async function connect() {
   device = localStorage.getItem("clip.device") || ("phone-" + Math.random().toString(36).slice(2, 8));
   localStorage.setItem("clip.device", device);
 
+  decryptOk = decryptFail = 0; pwWarned = false; // reset passphrase-health counters
   key = await deriveKey(secret, account);
   db = await openDb(account);
   (await dbTombstones()).forEach(([id, at]) => tombstones.set(id, at)); // deleted ids stay dead
