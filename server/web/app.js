@@ -392,6 +392,38 @@ function applyDelete(id) {
   forgetBlob(c?.blob_ref); render();
 }
 
+// Clear all non-pinned clips (pinned items are kept), syncing each removal to
+// your other devices via the same tombstone+delete path. Two-tap confirm.
+let clearArmed = false, clearTimer = null;
+function disarmClear() {
+  clearArmed = false; clearTimeout(clearTimer);
+  const b = $("clearall"); b.textContent = "Clear"; b.classList.remove("armed");
+}
+function onClearTap() {
+  const b = $("clearall");
+  if (!clearArmed) {
+    if (![...clips.values()].some((c) => !c.pinned)) { toast("Nothing to clear"); return; }
+    clearArmed = true; b.textContent = "Clear all?"; b.classList.add("armed"); haptic(10);
+    clearTimer = setTimeout(disarmClear, 3000);
+    return;
+  }
+  disarmClear();
+  clearAll();
+}
+async function clearAll() {
+  const toClear = [...clips.values()].filter((c) => !c.pinned);
+  if (!toClear.length) return;
+  const at = Date.now();
+  for (const c of toClear) {
+    clips.delete(c.id); dbDel(c.id); forgetBlob(c.blob_ref);
+    tombstones.set(c.id, at); dbTombstone(c.id, at);
+  }
+  render(); haptic([5, 24, 5]); toast(`Cleared ${toClear.length}`);
+  if (ws?.readyState === 1 && key) {
+    for (const c of toClear) { try { ws.send(await encryptClip({ delete: c.id })); } catch {} }
+  }
+}
+
 // A lone URL (no surrounding whitespace) should sync as a link, matching how the
 // desktop classifier tags copied links — so it shows a favicon, not plain text.
 function isUrl(s) {
@@ -569,6 +601,7 @@ async function connect() {
   $("connect").classList.add("hidden");
   $("nav").classList.remove("hidden");
   $("searchbar").classList.remove("hidden");
+  $("clearall").classList.remove("hidden");
   $("filters").classList.remove("hidden");
   $("list").classList.remove("hidden");
   $("composer").classList.remove("hidden");
@@ -579,6 +612,7 @@ async function connect() {
 // ---------- wire up ----------
 $("go").onclick = connect;
 $("send").onclick = send;
+$("clearall").onclick = onClearTap;
 $("msg").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
 $("filters").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-filter]");

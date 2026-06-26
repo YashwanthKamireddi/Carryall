@@ -60,6 +60,13 @@
         font-size: 12px; color: var(--label2); padding: 5px 11px; border-radius: 999px;
         background: var(--card); border: .5px solid var(--bar-stroke); text-transform: lowercase; }
       #status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--label3); }
+      /* Nav action button (Clear history — 2-tap confirm to avoid accidents) */
+      .navbtn { flex: 0 0 auto; border: none; background: var(--card); color: var(--label2);
+        font: inherit; font-size: 13px; font-weight: 590; padding: 5px 12px; border-radius: 999px;
+        border: .5px solid var(--bar-stroke); cursor: pointer;
+        transition: background .15s, color .15s, transform .14s var(--spring); }
+      .navbtn:active { transform: scale(.93); }
+      .navbtn.armed { background: rgba(255,69,58,.16); color: #ff453a; border-color: transparent; }
       #status.on .dot { background: #30d158; }
       #status.connecting .dot { background: #ff9f0a; }
 
@@ -187,7 +194,7 @@
     </style>
   </head>
   <body>
-    <div class="nav hidden" id="nav"><h1>Clipboard</h1><span id="status"><span class="dot"></span><span id="status-text">offline</span></span></div>
+    <div class="nav hidden" id="nav"><h1>Clipboard</h1><span id="status"><span class="dot"></span><span id="status-text">offline</span></span><button id="clearall" class="navbtn hidden" aria-label="Clear history">Clear</button></div>
 
     <div id="connect">
       <div class="hero">
