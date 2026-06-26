@@ -92,8 +92,21 @@ pub fn copy_clip(app: AppHandle, state: State<AppState>, id: String) -> Result<(
             let img = RustImageData::from_bytes(&bytes).map_err(|e| e.to_string())?;
             ctx.set_image(img).map_err(|e| e.to_string())?;
         }
+        ContentKind::Files | ContentKind::Video | ContentKind::Audio => {
+            // Put real files on the clipboard (text/uri-list) so the target app
+            // receives files, not the path string. Falls back to text.
+            let body = clip.body.clone().unwrap_or_default();
+            let paths: Vec<String> = String::from_utf8_lossy(&body)
+                .lines()
+                .map(str::to_string)
+                .filter(|l| !l.is_empty())
+                .collect();
+            if !set_files_clipboard(&paths) {
+                ctx.set_text(paths.join("\n")).map_err(|e| e.to_string())?;
+            }
+        }
         _ => {
-            // text/link/color/code/files all roundtrip as their UTF-8 body.
+            // text/link/color/code roundtrip as their UTF-8 body.
             let text = clip
                 .body
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
@@ -107,6 +120,59 @@ pub fn copy_clip(app: AppHandle, state: State<AppState>, id: String) -> Result<(
     // native history UIs that only put it on the clipboard.
     crate::paste::paste_after_focus_return();
     Ok(())
+}
+
+/// Put a file list on the clipboard as `text/uri-list` (Wayland via `wl-copy`),
+/// so pasting yields real files. Returns false if it couldn't (caller falls
+/// back to text). X11 file-copy is a future addition.
+fn set_files_clipboard(paths: &[String]) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let wayland = std::env::var("XDG_SESSION_TYPE")
+            .map(|v| v.eq_ignore_ascii_case("wayland"))
+            .unwrap_or(false)
+            || std::env::var("WAYLAND_DISPLAY")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
+        if wayland && cmd_exists("wl-copy") && !paths.is_empty() {
+            use std::io::Write;
+            use std::process::{Command, Stdio};
+            let uris = paths
+                .iter()
+                .map(|p| {
+                    if p.starts_with("file://") {
+                        p.clone()
+                    } else {
+                        format!("file://{}", p.replace(' ', "%20"))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\r\n");
+            if let Ok(mut child) = Command::new("wl-copy")
+                .args(["--type", "text/uri-list"])
+                .stdin(Stdio::piped())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(uris.as_bytes());
+                }
+                let _ = child.wait();
+                return true;
+            }
+        }
+    }
+    let _ = paths;
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn cmd_exists(bin: &str) -> bool {
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("command -v {bin}"))
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[tauri::command]

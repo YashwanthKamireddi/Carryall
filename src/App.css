@@ -7,7 +7,6 @@
   flex-direction: column;
   background: var(--bg);
   border-radius: var(--r-sheet);
-  border: 0.5px solid var(--separator);
   box-shadow: var(--shadow);
   overflow: hidden;
   font-family: var(--font);
@@ -61,12 +60,16 @@
 
 /* Leading icon square (iOS Settings style) */
 .leadicon {
+  position: relative;
   flex: 0 0 auto; width: 30px; height: 30px; border-radius: var(--r-icon);
   display: grid; place-items: center; overflow: hidden; background: var(--c-binary);
 }
 .leadicon .glyph { width: 18px; height: 18px; color: #fff; }
 .leadicon img { width: 100%; height: 100%; object-fit: cover; }
 .leadicon .swatch { width: 100%; height: 100%; }
+/* Real link favicon, on white, over the fallback glyph. */
+.leadicon .favicon { position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; padding: 5px; background: #fff; }
 
 .celltext { flex: 1; min-width: 0; }
 .ctitle { font-size: 16px; letter-spacing: -0.2px; color: var(--label);
@@ -80,10 +83,3 @@
   border-radius: 8px; cursor: pointer; transition: background var(--t-fast) var(--ease); }
 .acc:active { background: var(--fill); }
 .acc.on { color: var(--blue); }
-
-/* Footer hint */
-.footer { display: flex; align-items: center; gap: 16px; padding: 9px 18px;
-  border-top: 0.5px solid var(--separator); font-size: var(--fs-caption); color: var(--label-3); }
-.footer .keys { display: inline-flex; align-items: center; gap: 5px; }
-.footer kbd { font-family: var(--font); font-size: 11px; min-width: 16px; text-align: center;
-  padding: 1px 5px; border-radius: 5px; background: var(--fill); color: var(--label-2); }

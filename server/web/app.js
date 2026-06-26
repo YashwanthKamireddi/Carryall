@@ -105,10 +105,16 @@ function render() {
   const section = (label, items) => (items.length ? `<div class="sec">${label}</div>` + group(items) : "");
   list.innerHTML = q ? group(arr) : section("Pinned", pinned) + section("Recent", recent);
 }
+function faviconUrl(u) {
+  try { return `https://www.google.com/s2/favicons?domain=${new URL(u).hostname}&sz=64`; }
+  catch { return null; }
+}
 function cellHtml(c) {
   const isImg = c.kind === "image" && c.body;
+  const fav = c.kind === "link" ? faviconUrl(c.preview) : null;
   const inner = isImg ? `<img alt="" src="data:image/png;base64,${b64(c.body)}">`
     : c.kind === "color" ? `<div class="swatch" style="background:${escapeHtml(c.preview)}"></div>`
+    : fav ? `${svgIcon("link")}<img class="favicon" src="${fav}" onerror="this.style.display='none'">`
     : svgIcon(c.kind);
   return `<div class="cell" data-act="copy" data-id="${c.id}">
       <div class="leadicon" style="background:var(--c-${c.kind})">${inner}</div>

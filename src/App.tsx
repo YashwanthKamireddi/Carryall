@@ -1,4 +1,4 @@
-import { createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
+import { createSignal, createEffect, onMount, onCleanup, For, Show, Switch, Match } from "solid-js";
 import {
   type Clip,
   type ContentKind,
@@ -18,6 +18,15 @@ const KIND_LABEL: Record<ContentKind, string> = {
   text: "Text", link: "Link", color: "Color", code: "Code", rich_text: "Rich text",
   image: "Image", files: "Files", video: "Video", audio: "Audio", binary: "Binary",
 };
+
+/** Real favicon for a link's domain (falls back to the link glyph on error). */
+function faviconUrl(url: string): string | null {
+  try {
+    return `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=64`;
+  } catch {
+    return null;
+  }
+}
 
 function relativeTime(ms: number): string {
   const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -115,19 +124,23 @@ export default function App() {
       onClick={() => void commit(clip)}
     >
       <div class="leadicon" style={{ background: `var(--c-${clip.kind})` }}>
-        <Show
-          when={clip.kind === "image" && clip.thumb}
-          fallback={
-            <Show
-              when={clip.kind === "color"}
-              fallback={<span class="glyph"><KindIcon kind={clip.kind} /></span>}
-            >
-              <span class="swatch" style={{ background: clip.preview }} />
-            </Show>
-          }
-        >
-          <img src={clip.thumb} alt="" />
-        </Show>
+        <Switch fallback={<span class="glyph"><KindIcon kind={clip.kind} /></span>}>
+          <Match when={clip.kind === "image" && clip.thumb}>
+            <img src={clip.thumb} alt="" />
+          </Match>
+          <Match when={clip.kind === "color"}>
+            <span class="swatch" style={{ background: clip.preview }} />
+          </Match>
+          <Match when={clip.kind === "link" && faviconUrl(clip.preview)}>
+            <span class="glyph"><KindIcon kind="link" /></span>
+            <img
+              class="favicon"
+              src={faviconUrl(clip.preview)!}
+              alt=""
+              onError={(e) => (e.currentTarget.style.display = "none")}
+            />
+          </Match>
+        </Switch>
       </div>
       <div class="celltext">
         <div class="ctitle" classList={{ mono: clip.kind === "code" }}>{clip.preview}</div>
@@ -178,12 +191,6 @@ export default function App() {
             </Show>
           </Show>
         </Show>
-      </div>
-
-      <div class="footer">
-        <span class="keys"><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
-        <span class="keys"><kbd>↵</kbd> Paste</span>
-        <span class="keys"><kbd>⌫</kbd> Delete</span>
       </div>
     </div>
   );
