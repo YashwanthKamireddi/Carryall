@@ -15,16 +15,8 @@ import "./theme.css";
 import "./App.css";
 
 const KIND_LABEL: Record<ContentKind, string> = {
-  text: "Text",
-  link: "Link",
-  color: "Color",
-  code: "Code",
-  rich_text: "Rich text",
-  image: "Image",
-  files: "Files",
-  video: "Video",
-  audio: "Audio",
-  binary: "Binary",
+  text: "Text", link: "Link", color: "Color", code: "Code", rich_text: "Rich text",
+  image: "Image", files: "Files", video: "Video", audio: "Audio", binary: "Binary",
 };
 
 function relativeTime(ms: number): string {
@@ -40,23 +32,7 @@ export default function App() {
   const [clips, setClips] = createSignal<Clip[]>([]);
   const [selected, setSelected] = createSignal(0);
   let inputRef: HTMLInputElement | undefined;
-  let listRef: HTMLDivElement | undefined;
-
-  // Gliding selection highlight — slides between rows instead of snapping.
-  const [hl, setHl] = createSignal({ top: 0, height: 0, show: false });
-  const syncHighlight = () => {
-    const row = listRef?.querySelector<HTMLElement>(`[data-idx="${selected()}"]`);
-    if (row && clips().length) {
-      setHl({ top: row.offsetTop, height: row.offsetHeight, show: true });
-    } else {
-      setHl((h) => ({ ...h, show: false }));
-    }
-  };
-  createEffect(() => {
-    selected();
-    clips();
-    requestAnimationFrame(syncHighlight);
-  });
+  let scrollRef: HTMLDivElement | undefined;
 
   const refresh = async (q: string) => {
     const result = q.trim() ? await searchClips(q) : await listClips();
@@ -64,7 +40,6 @@ export default function App() {
     setSelected(0);
   };
 
-  // Debounced search as the user types.
   let debounce: number | undefined;
   createEffect(() => {
     const q = query();
@@ -75,14 +50,10 @@ export default function App() {
   onMount(async () => {
     await refresh("");
     inputRef?.focus();
-
-    // Live capture pushes: if not searching, prepend the new clip.
     const unlisten = await onNewClip((clip) => {
       if (query().trim()) return;
       setClips((prev) => [clip, ...prev.filter((c) => c.id !== clip.id)]);
     });
-
-    // When the palette is summoned (window regains focus), reset + focus.
     const onFocus = () => {
       setQuery("");
       void refresh("");
@@ -90,7 +61,6 @@ export default function App() {
       inputRef?.select();
     };
     window.addEventListener("focus", onFocus);
-
     onCleanup(() => {
       unlisten();
       window.removeEventListener("focus", onFocus);
@@ -98,174 +68,122 @@ export default function App() {
   });
 
   const commit = async (clip: Clip | undefined) => {
-    if (!clip) return;
-    await copyClip(clip.id);
+    if (clip) await copyClip(clip.id);
   };
-
   const move = (delta: number) => {
     const n = clips().length;
     if (n === 0) return;
     const next = Math.min(Math.max(selected() + delta, 0), n - 1);
     setSelected(next);
-    listRef
-      ?.querySelector(`[data-idx="${next}"]`)
-      ?.scrollIntoView({ block: "nearest" });
+    scrollRef?.querySelector(`[data-idx="${next}"]`)?.scrollIntoView({ block: "nearest" });
   };
-
   const onKeyDown = (e: KeyboardEvent) => {
-    // Ctrl/Cmd + 1–9 → instantly paste the Nth visible clip.
     if ((e.ctrlKey || e.metaKey) && e.key >= "1" && e.key <= "9") {
       e.preventDefault();
-      const idx = Number(e.key) - 1;
-      const target = clips()[idx];
-      if (target) void commit(target);
+      void commit(clips()[Number(e.key) - 1]);
       return;
     }
     switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        move(1);
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        move(-1);
-        break;
-      case "Enter":
-        e.preventDefault();
-        void commit(clips()[selected()]);
-        break;
-      case "Escape":
-        e.preventDefault();
-        void hidePalette();
-        break;
+      case "ArrowDown": e.preventDefault(); move(1); break;
+      case "ArrowUp": e.preventDefault(); move(-1); break;
+      case "Enter": e.preventDefault(); void commit(clips()[selected()]); break;
+      case "Escape": e.preventDefault(); void hidePalette(); break;
     }
   };
-
   const togglePin = async (clip: Clip, e: MouseEvent) => {
     e.stopPropagation();
     await setPin(clip.id, !clip.pinned);
     void refresh(query());
   };
-
   const remove = async (clip: Clip, e: MouseEvent) => {
     e.stopPropagation();
     await deleteClip(clip.id);
     setClips((prev) => prev.filter((c) => c.id !== clip.id));
   };
 
-  const pinnedCount = () => clips().filter((c) => c.pinned).length;
   const searching = () => query().trim().length > 0;
+  const pinnedCount = () => clips().filter((c) => c.pinned).length;
+  const pinned = () => clips().slice(0, pinnedCount());
+  const recent = () => clips().slice(pinnedCount());
 
-  return (
-    <div class="palette" onKeyDown={onKeyDown}>
-      <div class="search">
-        <span class="icon">
-          <SearchIcon />
-        </span>
-        <input
-          ref={inputRef}
-          class="search-input"
-          placeholder="Search your clipboard…"
-          spellcheck={false}
-          value={query()}
-          onInput={(e) => setQuery(e.currentTarget.value)}
-        />
-        <kbd class="hint">esc</kbd>
-      </div>
-
-      <div class="list" ref={listRef}>
-        <div
-          class="hl"
-          classList={{ show: hl().show }}
-          style={{ top: `${hl().top}px`, height: `${hl().height}px` }}
-        />
+  const Cell = (clip: Clip, gi: number) => (
+    <div
+      class="cell"
+      classList={{ selected: gi === selected() }}
+      data-idx={gi}
+      onMouseEnter={() => setSelected(gi)}
+      onClick={() => void commit(clip)}
+    >
+      <div class="leadicon" style={{ background: `var(--c-${clip.kind})` }}>
         <Show
-          when={clips().length > 0}
+          when={clip.kind === "image" && clip.thumb}
           fallback={
-            <div class="empty">
-              <div class="blob" />
-              {searching() ? "No matches." : "Nothing here yet — copy something."}
-            </div>
+            <Show
+              when={clip.kind === "color"}
+              fallback={<span class="glyph"><KindIcon kind={clip.kind} /></span>}
+            >
+              <span class="swatch" style={{ background: clip.preview }} />
+            </Show>
           }
         >
-          <For each={clips()}>
-            {(clip, i) => (
-              <>
-                <Show when={!searching() && i() === 0 && clip.pinned}>
-                  <div class="section-label">Pinned</div>
-                </Show>
-                <Show when={!searching() && i() === pinnedCount()}>
-                  <div class="section-label">Recent</div>
-                </Show>
-                <div
-                  class="row"
-                  classList={{ selected: i() === selected() }}
-                  data-idx={i()}
-                  onMouseEnter={() => setSelected(i())}
-                  onClick={() => void commit(clip)}
-                >
-                  <div class="thumb">
-                  <Show
-                    when={clip.kind === "image" && clip.thumb}
-                    fallback={
-                      <Show
-                        when={clip.kind === "color"}
-                        fallback={
-                          <span class="glyph">
-                            <KindIcon kind={clip.kind} />
-                          </span>
-                        }
-                      >
-                        <span class="swatch" style={{ background: clip.preview }} />
-                      </Show>
-                    }
-                  >
-                    <img src={clip.thumb} alt="" />
-                  </Show>
-                </div>
-                <div class="body">
-                  <div class="preview" classList={{ mono: clip.kind === "code" }}>
-                    {clip.preview}
-                  </div>
-                  <div class="meta">
-                    {KIND_LABEL[clip.kind]} · {relativeTime(clip.created_at)}
-                  </div>
-                </div>
-                <div class="actions">
-                  <button
-                    class="act"
-                    classList={{ on: clip.pinned }}
-                    title={clip.pinned ? "Unpin" : "Pin"}
-                    onClick={(e) => void togglePin(clip, e)}
-                  >
-                    <PinIcon />
-                  </button>
-                  <button
-                    class="act danger"
-                    title="Delete"
-                    onClick={(e) => void remove(clip, e)}
-                  >
-                    <TrashIcon />
-                  </button>
-                  </div>
-                </div>
-              </>
-            )}
-          </For>
+          <img src={clip.thumb} alt="" />
+        </Show>
+      </div>
+      <div class="celltext">
+        <div class="ctitle" classList={{ mono: clip.kind === "code" }}>{clip.preview}</div>
+        <div class="csub">{KIND_LABEL[clip.kind]} · {relativeTime(clip.created_at)}</div>
+      </div>
+      <div class="cellacc">
+        <button class="acc" classList={{ on: clip.pinned }} title={clip.pinned ? "Unpin" : "Pin"}
+          onClick={(e) => void togglePin(clip, e)}><PinIcon /></button>
+        <button class="acc" title="Delete" onClick={(e) => void remove(clip, e)}><TrashIcon /></button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div class="ios-sheet" onKeyDown={onKeyDown}>
+      <div class="nav">
+        <span class="title">Clipboard</span>
+        <span class="esc">esc</span>
+      </div>
+      <div class="search-wrap">
+        <div class="search-field">
+          <span class="icon"><SearchIcon /></span>
+          <input
+            ref={inputRef}
+            placeholder="Search"
+            spellcheck={false}
+            value={query()}
+            onInput={(e) => setQuery(e.currentTarget.value)}
+          />
+        </div>
+      </div>
+
+      <div class="scroll" ref={scrollRef}>
+        <Show
+          when={clips().length > 0}
+          fallback={<div class="empty">{searching() ? "No Results" : "No clips yet — copy something."}</div>}
+        >
+          <Show when={!searching()} fallback={
+            <div class="group"><For each={clips()}>{(c, i) => Cell(c, i())}</For></div>
+          }>
+            <Show when={pinned().length > 0}>
+              <div class="sec-header">Pinned</div>
+              <div class="group"><For each={pinned()}>{(c, i) => Cell(c, i())}</For></div>
+            </Show>
+            <Show when={recent().length > 0}>
+              <div class="sec-header">Recent</div>
+              <div class="group"><For each={recent()}>{(c, i) => Cell(c, pinnedCount() + i())}</For></div>
+            </Show>
+          </Show>
         </Show>
       </div>
 
       <div class="footer">
-        <span class="keys">
-          <kbd>↑</kbd>
-          <kbd>↓</kbd> Navigate
-        </span>
-        <span class="keys">
-          <kbd>↵</kbd> Paste
-        </span>
-        <span class="keys">
-          <kbd>⌫</kbd> Delete
-        </span>
+        <span class="keys"><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
+        <span class="keys"><kbd>↵</kbd> Paste</span>
+        <span class="keys"><kbd>⌫</kbd> Delete</span>
       </div>
     </div>
   );

@@ -101,18 +101,18 @@ function render() {
     list.innerHTML = `<div class="empty">${q ? "No matches." : "No clips yet.<br>Copy something on your desktop."}</div>`;
     return;
   }
-  const section = (label, items) => items.length
-    ? `<div class="sec">${label}</div>` + items.map(rowHtml).join("") : "";
-  list.innerHTML = (q ? arr.map(rowHtml).join("") : section("Pinned", pinned) + section("Recent", recent));
+  const group = (items) => `<div class="group">${items.map(cellHtml).join("")}</div>`;
+  const section = (label, items) => (items.length ? `<div class="sec">${label}</div>` + group(items) : "");
+  list.innerHTML = q ? group(arr) : section("Pinned", pinned) + section("Recent", recent);
 }
-function rowHtml(c) {
+function cellHtml(c) {
   const isImg = c.kind === "image" && c.body;
-  const tile = isImg ? `<img alt="" src="data:image/png;base64,${b64(c.body)}">`
+  const inner = isImg ? `<img alt="" src="data:image/png;base64,${b64(c.body)}">`
     : c.kind === "color" ? `<div class="swatch" style="background:${escapeHtml(c.preview)}"></div>`
     : svgIcon(c.kind);
-  return `<div class="row" data-id="${c.id}">
-      <div class="tile">${tile}</div>
-      <div class="meatball" data-act="copy" data-id="${c.id}">
+  return `<div class="cell" data-act="copy" data-id="${c.id}">
+      <div class="leadicon" style="background:var(--c-${c.kind})">${inner}</div>
+      <div class="body">
         <div class="ptext ${c.kind === "code" ? "mono" : ""}">${escapeHtml(c.preview)}</div>
         <div class="pmeta">${KIND_LABEL[c.kind] || c.kind} · ${relTime(c.created_at)}</div>
       </div>
