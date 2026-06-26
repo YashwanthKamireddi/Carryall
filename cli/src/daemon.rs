@@ -65,6 +65,19 @@ impl Ctx {
 pub async fn run() {
     let dir = data_dir();
     let _ = std::fs::create_dir_all(&dir);
+
+    // Single-instance: don't run two daemons against the same store.
+    let pidfile = dir.join("daemon.pid");
+    if let Ok(s) = std::fs::read_to_string(&pidfile) {
+        if let Ok(pid) = s.trim().parse::<u32>() {
+            if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                eprintln!("clip daemon: already running (pid {pid}) — exiting");
+                return;
+            }
+        }
+    }
+    let _ = std::fs::write(&pidfile, std::process::id().to_string());
+
     let store = match Store::open(dir.join("clip.db")) {
         Ok(s) => s,
         Err(e) => {
@@ -84,7 +97,7 @@ pub async fn run() {
     spawn_monitor(ctx.clone());
     eprintln!("clip daemon: capturing clipboard");
 
-    if let Some(cfg) = SyncConfig::from_env() {
+    if let Some(cfg) = SyncConfig::load() {
         eprintln!("clip daemon: sync enabled (account={})", cfg.account);
         spawn_sync(ctx.clone(), cfg);
     } else {
@@ -227,27 +240,51 @@ pub struct SyncConfig {
     pub key: Key,
 }
 impl SyncConfig {
-    pub fn from_env() -> Option<SyncConfig> {
-        let account = std::env::var("CLIP_ACCOUNT")
-            .ok()
-            .filter(|s| !s.is_empty())?;
-        let secret = std::env::var("CLIP_SECRET").unwrap_or_else(|_| account.clone());
-        let device = std::env::var("CLIP_DEVICE")
-            .unwrap_or_else(|_| format!("device-{}", std::process::id()));
-        let url =
-            std::env::var("CLIP_RELAY_URL").unwrap_or_else(|_| "ws://127.0.0.1:8787/sync".into());
+    /// Load from environment first, then `~/.config/clip/config.toml`
+    /// (simple `key = value` lines). Sync is off if no `account` is found.
+    pub fn load() -> Option<SyncConfig> {
+        let cfg = read_config();
+        let get = |env: &str, key: &str| {
+            std::env::var(env)
+                .ok()
+                .filter(|s| !s.is_empty())
+                .or_else(|| cfg.get(key).cloned())
+        };
+        let account = get("CLIP_ACCOUNT", "account")?;
+        let secret = get("CLIP_SECRET", "secret").unwrap_or_else(|| account.clone());
+        let device = get("CLIP_DEVICE", "device")
+            .unwrap_or_else(|| format!("device-{}", std::process::id()));
+        let url = get("CLIP_RELAY_URL", "relay")
+            .unwrap_or_else(|| "ws://127.0.0.1:8787/sync".into());
         let mut salt = account.as_bytes().to_vec();
         while salt.len() < 16 {
             salt.push(b'#');
         }
         let key = derive_key(secret.as_bytes(), &salt).ok()?;
-        Some(SyncConfig {
-            account,
-            device,
-            url,
-            key,
-        })
+        Some(SyncConfig { account, device, url, key })
     }
+}
+
+/// Path to the user config file.
+pub fn config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("clip").join("config.toml"))
+}
+
+/// Minimal `key = value` config reader (no TOML dep — stays lean).
+fn read_config() -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    if let Some(content) = config_path().and_then(|p| std::fs::read_to_string(p).ok()) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+                continue;
+            }
+            if let Some((k, v)) = line.split_once('=') {
+                map.insert(k.trim().to_string(), v.trim().trim_matches('"').to_string());
+            }
+        }
+    }
+    map
 }
 
 fn spawn_sync(ctx: Ctx, cfg: SyncConfig) {
