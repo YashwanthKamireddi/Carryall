@@ -4,8 +4,8 @@
   "description": "Your clipboard, on every device.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#16161c",
-  "theme_color": "#16161c",
+  "background_color": "#0f0f12",
+  "theme_color": "#0f0f12",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
