@@ -441,9 +441,49 @@ function isUrl(s) {
   return /^https?:\/\/[^\s]+\.[^\s]+$/i.test(t) || /^www\.[^\s]+\.[^\s]+$/i.test(t);
 }
 
-async function send() {
-  const text = $("msg").value;
-  if (!text || ws?.readyState !== 1) return;
+// ---------- preview / edit sheet (long-press a clip) ----------
+let sheetClip = null;
+function closeSheet() {
+  $("sheet").classList.remove("show");
+  $("sheetbg").classList.remove("show");
+  sheetClip = null;
+}
+async function openSheet(c) {
+  sheetClip = c; haptic(12);
+  const kind = normKind(c.kind);
+  const content = $("sheetcontent"), actions = $("sheetactions");
+  const editable = ["text", "code", "link", "rich_text", "binary"].includes(kind);
+  if (kind === "image") {
+    content.innerHTML = `<img class="preview" alt="">`;
+    const bytes = (await getBlob(c.blob_ref)) || (c.body ? new Uint8Array(c.body) : null);
+    if (bytes) content.querySelector("img").src = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+  } else if (FILE_KINDS.has(kind)) {
+    const whole = await getBlob(c.blob_ref);
+    const entries = whole && decodeArchive(whole);
+    const names = entries && entries.length ? entries.map((e) => e.name) : [c.preview || "file"];
+    content.innerHTML = `<div class="files">${names.map((n) => `<div class="f">${escapeHtml(n)}</div>`).join("")}</div>`;
+  } else {
+    content.innerHTML = `<textarea class="${kind === "code" ? "mono" : ""}" spellcheck="false"></textarea>`;
+    content.querySelector("textarea").value = bytesToStr(c.body) || c.preview || "";
+  }
+  const btns = [];
+  if (FILE_KINDS.has(kind)) {
+    btns.push(`<button class="sbtn primary" data-s="download">Download</button>`);
+  } else {
+    btns.push(`<button class="sbtn primary" data-s="copy">Copy</button>`);
+    if (editable) btns.push(`<button class="sbtn" data-s="send">Send edit</button>`);
+    if (kind === "image") btns.push(`<button class="sbtn" data-s="download">Download</button>`);
+  }
+  btns.push(`<button class="sbtn" data-s="pin">${c.pinned ? "Unpin" : "Pin"}</button>`);
+  btns.push(`<button class="sbtn danger" data-s="delete">Delete</button>`);
+  actions.innerHTML = btns.join("");
+  $("sheetbg").classList.add("show");
+  $("sheet").classList.add("show");
+}
+
+// Send a text/link clip (shared by the composer and the preview-sheet "Send edit").
+async function sendText(text) {
+  if (!text || ws?.readyState !== 1) return false;
   haptic(10);
   const kind = isUrl(text) ? "link" : "text";
   const body = [...enc.encode(text)];
@@ -452,7 +492,10 @@ async function send() {
     size: body.length, created_at: Date.now(), pinned: false };
   ws.send(await encryptClip(clip));
   ingest(clip);
-  $("msg").value = "";
+  return true;
+}
+async function send() {
+  if (await sendText($("msg").value)) $("msg").value = "";
 }
 
 const CHUNK = 256 * 1024; // larger chunks = far fewer encrypt/encode round-trips (faster uploads)
@@ -677,6 +720,7 @@ $("searchclear").onclick = () => {
 };
 $("list").addEventListener("click", (e) => {
   const el = e.target.closest("[data-act]"); if (!el) return;
+  if (Date.now() - lpSuppress < 600) return; // a long-press just opened the sheet
   const c = clips.get(el.dataset.id); if (!c) return;
   if (el.dataset.act === "open") {
     haptic(8);
@@ -694,6 +738,58 @@ $("list").addEventListener("click", (e) => {
     else deleteClip(c);
   }
 });
+// Long-press a clip → open the preview/edit sheet (short tap still copies).
+let lpTimer = null, lpStart = null, lpSuppress = 0;
+$("list").addEventListener("pointerdown", (e) => {
+  const cell = e.target.closest(".cell");
+  if (!cell || e.target.closest("button")) return; // row buttons handle themselves
+  const c = clips.get(cell.dataset.id); if (!c) return;
+  lpStart = { x: e.clientX, y: e.clientY };
+  clearTimeout(lpTimer);
+  lpTimer = setTimeout(() => { lpStart = null; lpSuppress = Date.now(); openSheet(c); }, 450);
+});
+$("list").addEventListener("pointermove", (e) => {
+  if (lpStart && (Math.abs(e.clientX - lpStart.x) > 10 || Math.abs(e.clientY - lpStart.y) > 10)) {
+    clearTimeout(lpTimer); lpStart = null; // moved → it's a scroll, not a long-press
+  }
+});
+const lpCancel = () => { clearTimeout(lpTimer); lpStart = null; };
+$("list").addEventListener("pointerup", lpCancel);
+$("list").addEventListener("pointercancel", lpCancel);
+$("list").addEventListener("pointerleave", lpCancel);
+
+// Sheet actions.
+$("sheetactions").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-s]"); if (!b || !sheetClip) return;
+  const c = sheetClip, ta = $("sheetcontent").querySelector("textarea");
+  switch (b.dataset.s) {
+    case "copy":
+      if (ta) toast((await copyText(ta.value)) ? "Copied" : "Couldn't copy");
+      else await openClip(c); // image → copy full-res
+      break;
+    case "send":
+      if (ta && ta.value.trim()) { await sendText(ta.value); toast("Sent"); }
+      break;
+    case "download": {
+      if (normKind(c.kind) === "image") {
+        const bytes = (await getBlob(c.blob_ref)) || (c.body ? new Uint8Array(c.body) : null);
+        if (bytes) { downloadBlob((c.preview || "image").replace(/\s*·.*$/, "").replace(/\.(png|jpe?g|gif|webp|bmp)$/i, "") + ".png", bytes, "image/png"); toast("Downloading"); }
+      } else {
+        const whole = await getBlob(c.blob_ref);
+        if (!whole) { toast("Receiving file…"); break; }
+        const en = decodeArchive(whole);
+        if (en && en.length) { en.forEach((f) => downloadBlob(f.name, f.data)); toast(en.length > 1 ? `Downloading ${en.length} files` : "Downloading"); }
+        else { downloadBlob(c.preview || "file", whole); toast("Downloading"); }
+      }
+      break;
+    }
+    case "pin": togglePin(c); b.textContent = c.pinned ? "Unpin" : "Pin"; break;
+    case "delete": deleteClip(c); closeSheet(); break;
+  }
+});
+$("sheetbg").addEventListener("click", closeSheet);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
+
 $("account").value = localStorage.getItem("clip.account") || "";
 $("secret").value = localStorage.getItem("clip.secret") || "";
 $("relay").value = localStorage.getItem("clip.relay") || "";
