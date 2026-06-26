@@ -101,14 +101,16 @@
       #connect .appicon svg { width: 32px; height: 32px; }
       #connect .hero h2 { font-size: 27px; font-weight: 700; letter-spacing: -.4px; line-height: 1.18; }
       #connect .hero p { color: var(--label2); font-size: 14.5px; line-height: 1.5; margin: 12px auto 0; max-width: 320px; }
-      #connect .group { background: var(--card); border-radius: var(--r-group); overflow: hidden; }
+      #connect .group { background: var(--card); border-radius: var(--r-group); overflow: hidden;
+        box-shadow: inset 0 .5px 0 rgba(255,255,255,.10); }
       #connect .group input { width: 100%; border: none; background: transparent; color: var(--label);
         font: inherit; font-size: 17px; padding: 15px 16px; outline: none; }
       #connect .group input:not(:last-child) { border-bottom: .5px solid var(--sep); }
       #connect button { width: 100%; border: none; border-radius: 14px; background: var(--blue);
         color: #fff; font: inherit; font-size: 17px; font-weight: 600; padding: 15px;
-        transition: transform .1s, opacity .1s; }
-      #connect button:active { transform: scale(.98); opacity: .9; }
+        box-shadow: 0 8px 22px -10px rgba(10,132,255,.7), inset 0 .5px 0 rgba(255,255,255,.22);
+        transition: transform .14s var(--spring), opacity .14s; }
+      #connect button:active { transform: scale(.97); opacity: .92; }
       #connect .lock { display: flex; align-items: center; justify-content: center; gap: 6px;
         font-size: 12.5px; color: var(--label3); margin-top: 4px; }
       #connect .lock svg { width: 13px; height: 13px; }
