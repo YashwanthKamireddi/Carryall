@@ -436,11 +436,7 @@ impl SyncConfig {
             .unwrap_or_else(|| format!("device-{}", std::process::id()));
         let url =
             get("CLIP_RELAY_URL", "relay").unwrap_or_else(|| "ws://127.0.0.1:8787/sync".into());
-        let mut salt = account.as_bytes().to_vec();
-        while salt.len() < 16 {
-            salt.push(b'#');
-        }
-        let key = derive_key(secret.as_bytes(), &salt).ok()?;
+        let key = derive_key(secret.as_bytes(), &account_salt(&account)).ok()?;
         Some(SyncConfig {
             account,
             device,
@@ -448,6 +444,18 @@ impl SyncConfig {
             key,
         })
     }
+}
+
+/// Derive the PBKDF2 salt from the account: the account's UTF-8 BYTES padded with
+/// `#` to at least 16 bytes. The PWA must pad bytes (not JS chars) identically, or
+/// a non-ASCII account (e.g. "café") would derive a different key and fail to
+/// decrypt across desktop↔phone.
+fn account_salt(account: &str) -> Vec<u8> {
+    let mut salt = account.as_bytes().to_vec();
+    while salt.len() < 16 {
+        salt.push(b'#');
+    }
+    salt
 }
 
 /// Path to the user config file.
@@ -697,8 +705,24 @@ fn should_apply(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_apply, url_encode};
+    use super::{account_salt, should_apply, url_encode};
     use crate::proto::Dedup;
+
+    #[test]
+    fn account_salt_pads_bytes_not_chars() {
+        // ASCII: padded to 16 bytes with '#'
+        assert_eq!(account_salt("yk"), b"yk##############".to_vec());
+        // already >=16 bytes: unchanged
+        assert_eq!(account_salt("0123456789abcdef"), b"0123456789abcdef".to_vec());
+        // non-ASCII: "café" = 5 UTF-8 bytes (é=0xC3 0xA9) → padded to 16 BYTES,
+        // which is what the PWA must match (pad bytes, not 4 JS chars).
+        let mut expected = "café".as_bytes().to_vec(); // 5 bytes
+        while expected.len() < 16 {
+            expected.push(b'#');
+        }
+        assert_eq!(account_salt("café"), expected);
+        assert_eq!(account_salt("café").len(), 16);
+    }
 
     #[test]
     fn url_encode_matches_what_the_relay_decodes() {

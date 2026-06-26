@@ -26,11 +26,13 @@ function filterBucket(kind) {
 
 // ---------- crypto (identical scheme to the desktop) ----------
 async function deriveKey(secret, acct) {
-  let salt = acct;
-  while (salt.length < 16) salt += "#";
+  // Salt = the account's UTF-8 BYTES padded with '#' (0x23) to >=16 bytes — pad
+  // bytes, not JS chars, so a non-ASCII account matches the Rust daemon's key.
+  const salt = [...enc.encode(acct)];
+  while (salt.length < 16) salt.push(0x23);
   const base = await crypto.subtle.importKey("raw", enc.encode(secret), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: enc.encode(salt), iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
+    { name: "PBKDF2", salt: new Uint8Array(salt), iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
     base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
 async function decryptFrame(data) {
