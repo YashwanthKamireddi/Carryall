@@ -368,14 +368,31 @@ mod tests {
     fn safe_join_blocks_path_traversal() {
         let base = Path::new("/tmp/recv");
         // Traversal / absolute attempts resolve safely under base or are rejected.
-        assert_eq!(safe_join(base, "../../etc/passwd"), Some(base.join("etc/passwd")));
-        assert_eq!(safe_join(base, "/etc/passwd"), Some(base.join("etc/passwd")));
+        assert_eq!(
+            safe_join(base, "../../etc/passwd"),
+            Some(base.join("etc/passwd"))
+        );
+        assert_eq!(
+            safe_join(base, "/etc/passwd"),
+            Some(base.join("etc/passwd"))
+        );
         assert_eq!(safe_join(base, "a/../../b"), Some(base.join("a/b")));
-        assert_eq!(safe_join(base, "ok/sub/file.txt"), Some(base.join("ok/sub/file.txt")));
-        assert_eq!(safe_join(base, "C:\\Windows\\x"), Some(base.join("Windows/x")));
+        assert_eq!(
+            safe_join(base, "ok/sub/file.txt"),
+            Some(base.join("ok/sub/file.txt"))
+        );
+        assert_eq!(
+            safe_join(base, "C:\\Windows\\x"),
+            Some(base.join("Windows/x"))
+        );
         assert_eq!(safe_join(base, "../.."), None); // nothing safe remains
-        // critically, no result ever escapes base
-        for n in ["../../etc/passwd", "/etc/passwd", "a/../../b", "C:\\Windows\\x"] {
+                                                    // critically, no result ever escapes base
+        for n in [
+            "../../etc/passwd",
+            "/etc/passwd",
+            "a/../../b",
+            "C:\\Windows\\x",
+        ] {
             assert!(safe_join(base, n).unwrap().starts_with(base));
         }
     }

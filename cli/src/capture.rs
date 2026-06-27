@@ -52,7 +52,10 @@ const MAX_INLINE_IMAGE_BYTES: u64 = 48 * 1024 * 1024;
 fn single_image_clip(path: &str) -> Option<NewClip> {
     let p = std::path::Path::new(path);
     let ext = p.extension()?.to_str()?.to_ascii_lowercase();
-    if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") {
+    if !matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+    ) {
         return None; // formats RustImageData reliably decodes
     }
     let meta = std::fs::metadata(p).ok()?;

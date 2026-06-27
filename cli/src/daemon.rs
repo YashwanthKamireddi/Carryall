@@ -732,7 +732,10 @@ mod tests {
         // ASCII: padded to 16 bytes with '#'
         assert_eq!(account_salt("yk"), b"yk##############".to_vec());
         // already >=16 bytes: unchanged
-        assert_eq!(account_salt("0123456789abcdef"), b"0123456789abcdef".to_vec());
+        assert_eq!(
+            account_salt("0123456789abcdef"),
+            b"0123456789abcdef".to_vec()
+        );
         // non-ASCII: "café" = 5 UTF-8 bytes (é=0xC3 0xA9) → padded to 16 BYTES,
         // which is what the PWA must match (pad bytes, not 4 JS chars).
         let mut expected = "café".as_bytes().to_vec(); // 5 bytes
