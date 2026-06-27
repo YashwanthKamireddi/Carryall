@@ -802,6 +802,22 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet
 $("account").value = localStorage.getItem("clip.account") || "";
 $("secret").value = localStorage.getItem("clip.secret") || "";
 $("relay").value = localStorage.getItem("clip.relay") || "";
+// QR pairing: a `#k=<base64url(account,secret,relay)>` fragment (from `carryall
+// pair`) pre-fills the form so a phone connects in one scan. The fragment never
+// reaches the server; we clear it from the URL immediately so the secret doesn't
+// linger in history.
+(function pairFromHash() {
+  const m = location.hash.match(/^#k=(.+)$/);
+  if (!m) return;
+  try {
+    const b64 = decodeURIComponent(m[1]).replace(/-/g, "+").replace(/_/g, "/");
+    const p = JSON.parse(decodeURIComponent(escape(atob(b64))));
+    if (p.a) $("account").value = p.a;
+    if (p.s) $("secret").value = p.s;
+    if (p.r) $("relay").value = p.r;
+  } catch {}
+  history.replaceState(null, "", location.pathname + location.search);
+})();
 if ($("account").value && $("secret").value) connect();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 

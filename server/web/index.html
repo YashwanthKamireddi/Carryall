@@ -114,6 +114,15 @@
       #connect .lock { display: flex; align-items: center; justify-content: center; gap: 6px;
         font-size: 12.5px; color: var(--label3); margin-top: 4px; }
       #connect .lock svg { width: 13px; height: 13px; }
+      /* Value-prop trio — premium onboarding, communicates the product at a glance */
+      #connect .valueprops { display: flex; gap: 8px; margin: 2px 0; }
+      #connect .vp { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 8px;
+        background: var(--card); border-radius: 14px; padding: 15px 6px;
+        box-shadow: inset 0 .5px 0 rgba(255,255,255,.08); }
+      #connect .vp .ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,.22); }
+      #connect .vp .ic svg { width: 19px; height: 19px; color: #fff; }
+      #connect .vp span { font-size: 12px; font-weight: 600; color: var(--label2); letter-spacing: .1px; }
 
       /* Drag-to-send overlay */
       #droplay { position: fixed; inset: 0; z-index: 20; display: none; place-items: center;
@@ -250,7 +259,12 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9 4.5h6V7H9z" fill="#fff" stroke="none"/></svg>
         </div>
         <h2>Your clipboard,<br>everywhere</h2>
-        <p>Enter the same account and passphrase as your desktop. Everything is end-to-end encrypted — the relay never sees your clips.</p>
+        <p>Copy on one device, paste on any other. Enter the same account and passphrase as your desktop — or just scan the code from <b>carryall pair</b>.</p>
+      </div>
+      <div class="valueprops">
+        <div class="vp"><div class="ic" style="background:var(--blue)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div><span>Private</span></div>
+        <div class="vp"><div class="ic" style="background:#ff9f0a"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2 4.5 13.5H11l-1 8.5L19.5 10H13z"/></svg></div><span>Instant</span></div>
+        <div class="vp"><div class="ic" style="background:#30d158"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="13" height="10" rx="2"/><rect x="15.5" y="9" width="6" height="11" rx="1.5"/></svg></div><span>Everywhere</span></div>
       </div>
       <div class="group">
         <input id="account" placeholder="Account" autocapitalize="off" autocorrect="off" spellcheck="false" />

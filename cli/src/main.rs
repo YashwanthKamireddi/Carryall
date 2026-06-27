@@ -7,6 +7,7 @@
 //!
 //!   carryall            run the daemon (foreground)
 //!   carryall daemon     run the daemon (explicit)
+//!   carryall pair       print a QR to pair your phone in one scan
 //!   carryall --version  print version
 
 mod apply;
@@ -19,10 +20,12 @@ mod proto;
 fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("--version") | Some("-V") => println!("carryall {}", env!("CARGO_PKG_VERSION")),
+        Some("pair") => daemon::print_pairing(),
         Some("--help") | Some("-h") => {
             println!(
                 "carryall — background clipboard daemon with E2E cross-device sync\n\n\
-                 USAGE:\n  carryall [daemon]   run the daemon\n  carryall --version\n\n\
+                 USAGE:\n  carryall [daemon]   run the daemon\n  carryall pair       \
+                 print a QR to pair your phone\n  carryall --version\n\n\
                  Sync config: ~/.config/clip/config.toml (account, secret, relay)\n\
                  or env: CLIP_ACCOUNT, CLIP_SECRET, CLIP_RELAY_URL"
             );

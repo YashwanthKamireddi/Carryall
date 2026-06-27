@@ -467,6 +467,54 @@ fn account_salt(account: &str) -> Vec<u8> {
     salt
 }
 
+/// `carryall pair` — print a QR (and URL) that pairs a phone in one scan. The QR
+/// encodes the PWA origin with account/secret/relay in the URL **fragment**
+/// (`#k=…`), which browsers never send to the server — so the secret stays
+/// client-side. The phone scans it, the PWA auto-fills and connects.
+pub fn print_pairing() {
+    use base64::{engine::general_purpose::URL_SAFE, Engine};
+    let cfg = read_config();
+    let get = |env: &str, key: &str| {
+        std::env::var(env)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| cfg.get(key).cloned())
+    };
+    let Some(account) = get("CLIP_ACCOUNT", "account") else {
+        eprintln!(
+            "carryall: no account configured — set account/secret in {} first.",
+            config_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        );
+        return;
+    };
+    let secret = get("CLIP_SECRET", "secret").unwrap_or_else(|| account.clone());
+    let relay = get("CLIP_RELAY_URL", "relay").unwrap_or_else(|| "ws://127.0.0.1:8787/sync".into());
+
+    // PWA origin = the relay's http(s) host, minus the /sync path.
+    let origin = relay
+        .replacen("wss://", "https://", 1)
+        .replacen("ws://", "http://", 1);
+    let origin = origin
+        .strip_suffix("/sync")
+        .unwrap_or(&origin)
+        .trim_end_matches('/');
+    let payload = serde_json::json!({ "a": account, "s": secret, "r": relay }).to_string();
+    let url = format!("{origin}/#k={}", URL_SAFE.encode(payload));
+
+    match qrcode::QrCode::new(url.as_bytes()) {
+        Ok(code) => {
+            let qr = code
+                .render::<qrcode::render::unicode::Dense1x2>()
+                .quiet_zone(true)
+                .build();
+            println!("\n  Scan with your phone's camera to pair Carryall:\n\n{qr}\n  {url}\n");
+        }
+        Err(_) => println!("\n  Open this on your phone to pair Carryall:\n\n  {url}\n"),
+    }
+}
+
 /// Path to the user config file.
 pub fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("clip").join("config.toml"))

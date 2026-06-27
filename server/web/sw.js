@@ -1,7 +1,7 @@
 // Service worker — enables PWA install ("Add to Home Screen") and offline use.
 // Network-first for the app shell so UI updates appear immediately (falling back
 // to cache only when offline). Live clip data always comes over the WebSocket.
-const CACHE = "clip-shell-v35";
+const CACHE = "clip-shell-v36";
 const SHELL = ["/", "/app.js", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (e) => {
