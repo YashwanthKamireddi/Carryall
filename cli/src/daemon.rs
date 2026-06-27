@@ -71,7 +71,14 @@ pub fn data_dir() -> PathBuf {
 impl Ctx {
     /// Persist a freshly captured clip (dedup + blob externalize) and forward to sync.
     fn ingest(&self, new_clip: NewClip) {
+        use clip_core::ContentKind::{Audio, Files, Video};
         let new_clip = crate::blobs::externalize(&self.blob_dir, new_clip);
+        // A file/folder selection too large to content-sync (e.g. a copied game
+        // or a multi-GB folder, past the blob/archive caps) ends up with no blob.
+        // Keep it in LOCAL history, but don't sync un-downloadable names to other
+        // devices — so copying huge things locally stays local.
+        let syncable =
+            !(matches!(new_clip.kind, Files | Video | Audio) && new_clip.blob_ref.is_none());
         let now = now_ms();
         let stored = {
             let store = match self.store.lock() {
@@ -86,7 +93,9 @@ impl Ctx {
                 }
             }
         };
-        let _ = self.outgoing.send(stored);
+        if syncable {
+            let _ = self.outgoing.send(stored);
+        }
     }
 }
 
