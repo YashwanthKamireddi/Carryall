@@ -587,8 +587,8 @@ async function sendFiles(files) {
 
 // Size caps mirror the desktop daemon (cli/src/blobs.rs): full-quality transfer,
 // but bounded so a huge pick can't blow up the tab's memory silently.
-const MAX_FILE_BYTES = 256 * 1024 * 1024; // per file
-const MAX_TOTAL_BYTES = 1024 * 1024 * 1024; // per multi-file selection
+const MAX_FILE_BYTES = 512 * 1024 * 1024; // per file (matches daemon MAX_BLOB_BYTES)
+const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024; // per multi-file selection (matches MAX_ARCHIVE_BYTES)
 const fmtMB = (b) => (b / 1048576).toFixed(b < 10485760 ? 1 : 0) + " MB";
 
 // Dispatch a selection: images send as images, the rest bundle as files.

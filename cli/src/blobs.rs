@@ -10,13 +10,14 @@ use clipboard_rs::{common::RustImage, RustImageData};
 
 const THUMB_MAX: u32 = 400;
 /// Max single-file size we content-sync — sized to carry full-quality photos and
-/// videos without downscaling. The blob is content-addressed + integrity-checked
-/// and always transferred byte-for-byte (no compression). NOTE: a received blob
-/// is currently reassembled in memory, so this cap also bounds peak RAM; lifting
-/// it further wants streaming-to-disk reassembly (a protocol offset field).
-pub const MAX_BLOB_BYTES: u64 = 256 * 1024 * 1024;
-/// Max total for a multi-file selection archive. 1 GiB.
-pub const MAX_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
+/// most videos without downscaling. The blob is content-addressed + integrity-
+/// checked and always transferred byte-for-byte (no compression). NOTE: a received
+/// blob is reassembled in memory, so this cap also bounds peak RAM (~2× on the
+/// receiver); the mobile browser is the tightest client, so this stays well under
+/// a level that could OOM a phone tab. Lifting further wants streaming-to-disk.
+pub const MAX_BLOB_BYTES: u64 = 512 * 1024 * 1024;
+/// Max total for a multi-file selection / folder archive. 2 GiB.
+pub const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Prepare a freshly captured clip for storage + sync:
 /// - Image: write full PNG to the blob store, keep a thumbnail inline.
