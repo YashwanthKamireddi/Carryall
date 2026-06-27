@@ -166,7 +166,7 @@ pub async fn run() {
             spawn_sync(ctx.clone(), cfg);
         }
     } else {
-        eprintln!("carryall: local-only (set CLIP_ACCOUNT to enable sync)");
+        eprintln!("carryall: local-only — run `carryall setup` to sync to your devices");
     }
 
     // Periodic retention prune (non-pinned > 30 days).

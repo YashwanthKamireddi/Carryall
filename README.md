@@ -47,30 +47,14 @@ Copy something on one device and it’s **instantly on your other devices’ nat
 
 The desktop daemon watches your OS clipboard and syncs each copy; the relay fans encrypted blobs between your devices and serves the phone app. Two devices on the same network skip the cloud entirely via the LAN path.
 
-## Quick start
+## Quick start — one command
 
 ```bash
-# Build the daemon + relay (one Rust workspace)
-cargo build --release
-
-# Run it (local-only until you add an account)
-./target/release/carryall
+git clone https://github.com/YashwanthKamireddi/Carryall && cd Carryall
+./setup.sh        # builds, generates your key, writes config, installs autostart
 ```
 
-Add sync in `~/.config/clip/config.toml`:
-
-```toml
-account = "you"
-secret  = "a strong passphrase"   # this IS your encryption key
-relay   = "wss://your-relay/sync" # omit for LAN-only
-```
-
-**Autostart on login (Linux):**
-
-```bash
-cp contrib/carryall-daemon.service ~/.config/systemd/user/
-systemctl --user enable --now carryall-daemon
-```
+That's it — Carryall is now capturing and syncing in the background. Add `-y` to skip every prompt. (Prefer manual? Build with `cargo build --release` and put `account`/`secret`/`relay` in `~/.config/clip/config.toml`.)
 
 ## Pair your phone in one scan
 

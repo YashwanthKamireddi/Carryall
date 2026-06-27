@@ -6,6 +6,7 @@
 //! phone is instantly pasteable here.
 //!
 //!   carryall            run the daemon (foreground)
+//!   carryall setup      one-shot first-run setup (config + autostart)
 //!   carryall daemon     run the daemon (explicit)
 //!   carryall pair       print a QR to pair your phone in one scan
 //!   carryall --version  print version
@@ -16,18 +17,21 @@ mod capture;
 mod daemon;
 mod lan;
 mod proto;
+mod setup;
 
 fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("--version") | Some("-V") => println!("carryall {}", env!("CARGO_PKG_VERSION")),
+        Some("setup") => setup::run(),
         Some("pair") => daemon::print_pairing(),
         Some("--help") | Some("-h") => {
             println!(
                 "carryall — background clipboard daemon with E2E cross-device sync\n\n\
-                 USAGE:\n  carryall [daemon]   run the daemon\n  carryall pair       \
+                 USAGE:\n  carryall setup      first-run setup (config + autostart)\n  \
+                 carryall [daemon]   run the daemon\n  carryall pair       \
                  print a QR to pair your phone\n  carryall --version\n\n\
-                 Sync config: ~/.config/clip/config.toml (account, secret, relay)\n\
-                 or env: CLIP_ACCOUNT, CLIP_SECRET, CLIP_RELAY_URL"
+                 Setup writes ~/.config/clip/config.toml (account, secret, relay).\n\
+                 Run `carryall setup` to get started."
             );
         }
         _ => {
