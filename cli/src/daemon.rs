@@ -88,7 +88,7 @@ impl Ctx {
             match store.insert(new_clip, now) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("clip: store insert failed: {e}");
+                    eprintln!("carryall: store insert failed: {e}");
                     return;
                 }
             }
@@ -109,7 +109,7 @@ pub async fn run() {
     if let Ok(s) = std::fs::read_to_string(&pidfile) {
         if let Ok(pid) = s.trim().parse::<u32>() {
             if std::path::Path::new(&format!("/proc/{pid}")).exists() {
-                eprintln!("clip daemon: already running (pid {pid}) — exiting");
+                eprintln!("carryall: already running (pid {pid}) — exiting");
                 return;
             }
         }
@@ -119,7 +119,7 @@ pub async fn run() {
     let store = match Store::open(dir.join("clip.db")) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("clip: cannot open store: {e}");
+            eprintln!("carryall: cannot open store: {e}");
             return;
         }
     };
@@ -136,10 +136,10 @@ pub async fn run() {
     };
 
     spawn_monitor(ctx.clone());
-    eprintln!("clip daemon: capturing clipboard");
+    eprintln!("carryall: capturing clipboard");
 
     if let Some(cfg) = SyncConfig::load() {
-        eprintln!("clip daemon: sync enabled (account={})", cfg.account);
+        eprintln!("carryall: sync enabled (account={})", cfg.account);
         // LAN peer-to-peer fast-path (direct, low-latency). Additive to relay.
         let port = std::env::var("CLIP_LAN_PORT")
             .ok()
@@ -161,12 +161,12 @@ pub async fn run() {
         // Relay path (cross-network). Set CLIP_RELAY_URL="" to run LAN-only.
         let relay_disabled = matches!(std::env::var("CLIP_RELAY_URL"), Ok(s) if s.is_empty());
         if relay_disabled {
-            eprintln!("clip daemon: relay disabled (LAN-only)");
+            eprintln!("carryall: relay disabled (LAN-only)");
         } else {
             spawn_sync(ctx.clone(), cfg);
         }
     } else {
-        eprintln!("clip daemon: local-only (set CLIP_ACCOUNT to enable sync)");
+        eprintln!("carryall: local-only (set CLIP_ACCOUNT to enable sync)");
     }
 
     // Periodic retention prune (non-pinned > 30 days).
@@ -231,7 +231,7 @@ fn clipboard_rs_loop(daemon: Ctx) {
     let ctx = match ClipboardContext::new() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("clip: clipboard init failed: {e}");
+            eprintln!("carryall: clipboard init failed: {e}");
             return;
         }
     };
@@ -243,7 +243,7 @@ fn clipboard_rs_loop(daemon: Ctx) {
     let mut watcher = match ClipboardWatcherContext::new() {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("clip: watcher init failed: {e}");
+            eprintln!("carryall: watcher init failed: {e}");
             return;
         }
     };
@@ -522,7 +522,7 @@ fn spawn_sync(ctx: Ctx, cfg: SyncConfig) {
         loop {
             let started = Instant::now();
             if let Err(e) = sync_connection(&ctx, &cfg, &endpoint).await {
-                eprintln!("clip: sync ended: {e}");
+                eprintln!("carryall: sync ended: {e}");
             }
             if started.elapsed() >= Duration::from_secs(10) {
                 backoff = Duration::from_secs(1); // was genuinely connected → reset
@@ -540,7 +540,7 @@ async fn sync_connection(ctx: &Ctx, cfg: &SyncConfig, endpoint: &str) -> Result<
     let (ws, _) = tokio_tungstenite::connect_async(endpoint)
         .await
         .map_err(|e| e.to_string())?;
-    eprintln!("clip: sync connected");
+    eprintln!("carryall: sync connected");
     let (mut write, mut read) = ws.split();
     let mut outgoing = ctx.outgoing.subscribe();
 
@@ -622,7 +622,7 @@ async fn sync_connection(ctx: &Ctx, cfg: &SyncConfig, endpoint: &str) -> Result<
                             // Integrity: drop a blob whose content doesn't match its ref.
                             if let Some(k) = pending.get(ref_).map(|c| c.kind) {
                                 if !crate::blobs::verify_ref(k, ref_, &whole) {
-                                    eprintln!("clip: blob integrity check failed ({ref_}); dropping");
+                                    eprintln!("carryall: blob integrity check failed ({ref_}); dropping");
                                     pending.remove(ref_);
                                     continue;
                                 }

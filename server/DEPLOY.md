@@ -1,4 +1,4 @@
-# Deploying the Clip relay (permanent, anywhere, 24/7)
+# Deploying the Carryall relay (permanent, anywhere, 24/7)
 
 The relay is a tiny stateless service that fans out **end-to-end-encrypted**
 clip frames between an account's devices and keeps a bounded per-account backlog
@@ -19,14 +19,14 @@ fly launch --copy-config --config server/fly.toml --dockerfile server/Dockerfile
 fly deploy --config server/fly.toml
 ```
 
-You get a permanent URL like `https://clip-relay.fly.dev`. TLS is automatic, which
+You get a permanent URL like `https://carryall-relay.fly.dev`. TLS is automatic, which
 also satisfies the iPhone PWA's secure-context needs (install + image copy).
 
 ## Option B — any Docker host (VPS, Railway, Render, …)
 
 ```bash
-docker build -f server/Dockerfile -t clip-relay .
-docker run -p 8787:8787 clip-relay
+docker build -f server/Dockerfile -t carryall-relay .
+docker run -p 8787:8787 carryall-relay
 ```
 
 Put it behind a TLS-terminating reverse proxy (Caddy/nginx) with a domain.

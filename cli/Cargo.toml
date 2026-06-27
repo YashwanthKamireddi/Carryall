@@ -1,12 +1,12 @@
 [package]
-name = "clip"
+name = "carryall"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Clip — lightweight clipboard daemon + TUI with E2E cross-device sync."
+description = "Carryall — lightweight clipboard daemon with E2E cross-device sync."
 
 [[bin]]
-name = "clip"
+name = "carryall"
 path = "src/main.rs"
 
 [dependencies]

@@ -32,7 +32,7 @@ pub fn spawn(ctx: Ctx, key: Key, port: u16, peer: Option<String>, device: String
     let lk = key.clone();
     tokio::spawn(async move {
         if let Err(e) = listen(lc, lk, port).await {
-            eprintln!("clip lan: listener error: {e}");
+            eprintln!("carryall lan: listener error: {e}");
         }
     });
     if let Some(addr) = peer {
@@ -46,12 +46,12 @@ pub fn spawn(ctx: Ctx, key: Key, port: u16, peer: Option<String>, device: String
 /// the relay and manual-peer paths keep working.
 fn discover(ctx: Ctx, key: Key, port: u16, device: String, acct_fp: String) {
     use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
-    const SVC: &str = "_clibo._tcp.local.";
+    const SVC: &str = "_carryall._tcp.local.";
 
     let mdns = match ServiceDaemon::new() {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("clip lan: mDNS unavailable ({e}); relay/manual peer still active");
+            eprintln!("carryall lan: mDNS unavailable ({e}); relay/manual peer still active");
             return;
         }
     };
@@ -63,16 +63,16 @@ fn discover(ctx: Ctx, key: Key, port: u16, device: String, acct_fp: String) {
         Ok(info) => {
             let info = info.enable_addr_auto();
             if let Err(e) = mdns.register(info) {
-                eprintln!("clip lan: mDNS register failed: {e}");
+                eprintln!("carryall lan: mDNS register failed: {e}");
             }
         }
-        Err(e) => eprintln!("clip lan: mDNS service info error: {e}"),
+        Err(e) => eprintln!("carryall lan: mDNS service info error: {e}"),
     }
 
     let browse = match mdns.browse(SVC) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("clip lan: mDNS browse failed: {e}");
+            eprintln!("carryall lan: mDNS browse failed: {e}");
             return;
         }
     };
@@ -98,7 +98,7 @@ fn discover(ctx: Ctx, key: Key, port: u16, device: String, acct_fp: String) {
             if let Some(ip) = info.get_addresses().iter().next() {
                 let addr = format!("{ip}:{p}");
                 if dialed.insert(addr.clone()) {
-                    eprintln!("clip lan: discovered peer {peer_dev} at {addr}");
+                    eprintln!("carryall lan: discovered peer {peer_dev} at {addr}");
                     tokio::spawn(dial_loop(ctx.clone(), key.clone(), addr));
                 }
             }
@@ -108,7 +108,7 @@ fn discover(ctx: Ctx, key: Key, port: u16, device: String, acct_fp: String) {
 
 async fn listen(ctx: Ctx, key: Key, port: u16) -> std::io::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", port)).await?;
-    eprintln!("clip lan: listening on :{port}");
+    eprintln!("carryall lan: listening on :{port}");
     loop {
         let (sock, _addr) = listener.accept().await?;
         let (ctx, key) = (ctx.clone(), key.clone());
@@ -121,7 +121,7 @@ async fn listen(ctx: Ctx, key: Key, port: u16) -> std::io::Result<()> {
 async fn dial_loop(ctx: Ctx, key: Key, addr: String) {
     loop {
         if let Ok(sock) = TcpStream::connect(&addr).await {
-            eprintln!("clip lan: connected to peer {addr}");
+            eprintln!("carryall lan: connected to peer {addr}");
             let _ = serve(ctx.clone(), key.clone(), sock).await;
         }
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -210,7 +210,7 @@ impl Inbound {
                 // Integrity: drop a blob whose content doesn't match its ref.
                 if let Some(k) = self.pending.get(ref_).map(|c| c.kind) {
                     if !crate::blobs::verify_ref(k, ref_, &whole) {
-                        eprintln!("clip lan: blob integrity check failed ({ref_}); dropping");
+                        eprintln!("carryall lan: blob integrity check failed ({ref_}); dropping");
                         self.pending.remove(ref_);
                         return;
                     }

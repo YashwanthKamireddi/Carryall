@@ -1,11 +1,11 @@
 [Unit]
-Description=Clip clipboard daemon (background capture + E2E sync)
+Description=Carryall clipboard daemon (background capture + E2E sync)
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 # Sync settings come from ~/.config/clip/config.toml (account/secret/relay).
-ExecStart=%h/.local/bin/clip daemon
+ExecStart=%h/.local/bin/carryall daemon
 Restart=on-failure
 RestartSec=3
 
@@ -13,5 +13,5 @@ RestartSec=3
 WantedBy=graphical-session.target
 
 # Install:
-#   cp contrib/clip-daemon.service ~/.config/systemd/user/
-#   systemctl --user enable --now clip-daemon
+#   cp contrib/carryall-daemon.service ~/.config/systemd/user/
+#   systemctl --user enable --now carryall-daemon

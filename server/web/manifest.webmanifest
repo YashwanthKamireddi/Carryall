@@ -1,6 +1,6 @@
 {
-  "name": "Clip",
-  "short_name": "Clip",
+  "name": "Carryall",
+  "short_name": "Carryall",
   "description": "Your clipboard, on every device.",
   "start_url": "/",
   "display": "standalone",

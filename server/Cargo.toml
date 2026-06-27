@@ -1,12 +1,12 @@
 [package]
-name = "clip-relay"
+name = "carryall-relay"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Clip sync relay: fans out end-to-end-encrypted clip events between an account's devices. Never sees plaintext."
+description = "Carryall sync relay: fans out end-to-end-encrypted clip events between an account's devices. Never sees plaintext."
 
 [[bin]]
-name = "clip-relay"
+name = "carryall-relay"
 path = "src/main.rs"
 
 [dependencies]

@@ -17,7 +17,9 @@ async fn two_devices_sync_a_clip_end_to_end() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, clip_relay::router()).await.unwrap();
+        axum::serve(listener, carryall_relay::router())
+            .await
+            .unwrap();
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
 

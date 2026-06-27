@@ -10,7 +10,7 @@
 
 #[tokio::main]
 async fn main() {
-    let app = clip_relay::router_from_env().await;
+    let app = carryall_relay::router_from_env().await;
     let addr = std::env::var("CLIP_RELAY_ADDR").unwrap_or_else(|_| "0.0.0.0:8787".into());
     let listener = tokio::net::TcpListener::bind(&addr)
         .await

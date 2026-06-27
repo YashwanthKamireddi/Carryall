@@ -232,6 +232,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 
 [[package]]
+name = "carryall"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "clip-core",
+ "clip-store",
+ "clip-sync",
+ "clipboard-rs",
+ "dirs",
+ "futures-util",
+ "mdns-sd",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.23.1",
+ "wl-clipboard-rs",
+]
+
+[[package]]
+name = "carryall-relay"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clip-core",
+ "clip-sync",
+ "futures-util",
+ "redis",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.23.1",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -258,46 +292,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "clip"
-version = "0.1.0"
-dependencies = [
- "base64",
- "clip-core",
- "clip-store",
- "clip-sync",
- "clipboard-rs",
- "dirs",
- "futures-util",
- "mdns-sd",
- "serde_json",
- "tokio",
- "tokio-tungstenite 0.23.1",
- "wl-clipboard-rs",
-]
-
-[[package]]
 name = "clip-core"
 version = "0.1.0"
 dependencies = [
  "blake3",
  "serde",
  "url",
-]
-
-[[package]]
-name = "clip-relay"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clip-core",
- "clip-sync",
- "futures-util",
- "redis",
- "rusqlite",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite 0.23.1",
 ]
 
 [[package]]

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-description = "Platform-agnostic engine for Clip: content model, classification, hashing, sync events."
+description = "Platform-agnostic engine for Carryall: content model, classification, hashing, sync events."
 
 [dependencies]
 serde = { workspace = true }
