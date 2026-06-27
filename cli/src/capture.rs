@@ -42,6 +42,31 @@ pub fn image_clip(png: Vec<u8>) -> Option<NewClip> {
     })
 }
 
+/// Largest image FILE we inline as an Image clip (thumbnail + full sync). Bigger
+/// images stay generic file copies. Covers any realistic wallpaper/screenshot.
+const MAX_INLINE_IMAGE_BYTES: u64 = 48 * 1024 * 1024;
+
+/// A single copied image file → an Image clip (so a wallpaper/screenshot copied
+/// in a file manager shows a preview and lands in the Images filter, instead of a
+/// generic "Files" row). Returns None if it's not a single decodable image file.
+fn single_image_clip(path: &str) -> Option<NewClip> {
+    let p = std::path::Path::new(path);
+    let ext = p.extension()?.to_str()?.to_ascii_lowercase();
+    if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") {
+        return None; // formats RustImageData reliably decodes
+    }
+    let meta = std::fs::metadata(p).ok()?;
+    if !meta.is_file() || meta.len() == 0 || meta.len() > MAX_INLINE_IMAGE_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(p).ok()?;
+    // Only treat as an image if it actually decodes as one.
+    if RustImageData::from_bytes(&bytes).is_err() {
+        return None;
+    }
+    image_clip(bytes)
+}
+
 pub fn files_clip(files: Vec<String>) -> Option<NewClip> {
     let files: Vec<String> = files
         .into_iter()
@@ -50,6 +75,13 @@ pub fn files_clip(files: Vec<String>) -> Option<NewClip> {
         .collect();
     if files.is_empty() {
         return None;
+    }
+    // A lone image file copied from a file manager arrives as a uri-list, not
+    // pixels — recognize it and present it as an image (preview + Images filter).
+    if files.len() == 1 {
+        if let Some(img) = single_image_clip(&files[0]) {
+            return Some(img);
+        }
     }
     let kind = files_kind(&files);
     let preview = summarize_files(&files);
