@@ -57,8 +57,10 @@ many instances as you like.
 - Fly.io: hashing on the path/query is configured at the proxy; or run one app
   per region and let Anycast route.
 - nginx: `hash $arg_account consistent;` in an `upstream` block.
-- Point `CLIP_RELAY_DB` at a **persistent volume** so an account's backlog
-  survives instance restarts/redeploys.
+- The backlog is **durable by default** (a SQLite file in the working dir; the
+  image uses `/data`). Mount a **persistent volume** at `/data` so it survives
+  restarts/redeploys. Override the path with `CLIP_RELAY_DB=<path>`, or set
+  `CLIP_RELAY_DB=memory` to opt out of persistence.
 
 **Multi-instance shared bus (for HA where any instance serves any account):**
 set `CLIP_REDIS_URL` (e.g. `redis://host:6379`) on every instance. Each relay
@@ -68,6 +70,7 @@ sticky routing needed. Redis carries ciphertext only. Verified across two
 instances + Valkey.
 
 **Limits:** max frame size 8 MiB (large blobs are chunked client-side);
-per-account backlog bounded (default 500 frames); per-account connection cap 32.
+per-account backlog bounded (default 500 frames) with a global cap (100k frames)
+so an open relay can't be filled; per-account connection cap 32.
 
 **Privacy:** the server stores/forwards ciphertext only — losing it leaks nothing.
