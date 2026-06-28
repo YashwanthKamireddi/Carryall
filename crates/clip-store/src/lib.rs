@@ -166,7 +166,7 @@ impl Store {
     pub fn recent(&self, limit: i64) -> Result<Vec<Clip>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, kind, preview, body, blob_ref, size, created_at, pinned, html \
-             FROM clips ORDER BY pinned DESC, created_at DESC LIMIT ?1",
+             FROM clips ORDER BY pinned DESC, created_at DESC, rowid DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], row_to_clip)?;
         rows.collect()
@@ -183,7 +183,7 @@ impl Store {
             "SELECT c.id, c.kind, c.preview, c.body, c.blob_ref, c.size, c.created_at, c.pinned, c.html \
              FROM clips_fts f JOIN clips c ON c.rowid = f.rowid \
              WHERE clips_fts MATCH ?1 \
-             ORDER BY c.pinned DESC, c.created_at DESC LIMIT ?2",
+             ORDER BY c.pinned DESC, c.created_at DESC, c.rowid DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![fts, limit], row_to_clip)?;
         rows.collect()
@@ -226,10 +226,23 @@ impl Store {
             .optional()
     }
 
-    /// Remove all non-pinned clips (used by "clear history").
-    pub fn clear(&self) -> Result<()> {
+    /// Remove all non-pinned clips (used by "clear history"). Tombstones each
+    /// removed id (like [`Self::delete`]) so a peer's backlog replay can't
+    /// resurrect them; a genuine re-copy (newer `created_at`) still revives.
+    pub fn clear(&self, now_ms: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO tombstones (id, deleted_at) \
+             SELECT id, ?1 FROM clips WHERE pinned = 0 \
+             ON CONFLICT(id) DO UPDATE SET deleted_at = excluded.deleted_at",
+            params![now_ms],
+        )?;
         self.conn
             .execute("DELETE FROM clips WHERE pinned = 0", [])?;
+        self.conn.execute(
+            "DELETE FROM tombstones WHERE id IN \
+             (SELECT id FROM tombstones ORDER BY deleted_at DESC LIMIT -1 OFFSET 4096)",
+            [],
+        )?;
         Ok(())
     }
 
@@ -388,10 +401,20 @@ mod tests {
         store.insert(text_clip("newer"), 5000).unwrap();
         store.set_pinned(&pinned.id, true).unwrap();
         assert_eq!(store.recent(10).unwrap()[0].preview, "keep me");
-        store.clear().unwrap();
+        let cleared_id = store
+            .recent(10)
+            .unwrap()
+            .iter()
+            .find(|c| c.preview == "newer")
+            .unwrap()
+            .id
+            .clone();
+        store.clear(6000).unwrap();
         let left = store.recent(10).unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].preview, "keep me");
+        // The cleared clip is tombstoned, so a stale backlog replay can't revive it.
+        assert_eq!(store.tombstoned_at(&cleared_id).unwrap(), Some(6000));
     }
 
     #[test]

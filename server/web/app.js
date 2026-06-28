@@ -546,10 +546,12 @@ function isUrl(s) {
 
 // ---------- preview / edit sheet (long-press a clip) ----------
 let sheetClip = null;
+let sheetObjUrl = null; // object URL for an image preview — revoked on close (no leak)
 function closeSheet() {
   $("sheet").classList.remove("show");
   $("sheetbg").classList.remove("show");
   sheetClip = null;
+  if (sheetObjUrl) { URL.revokeObjectURL(sheetObjUrl); sheetObjUrl = null; }
 }
 async function openSheet(c) {
   sheetClip = c; haptic(12);
@@ -559,7 +561,7 @@ async function openSheet(c) {
   if (kind === "image") {
     content.innerHTML = `<img class="preview" alt="">`;
     const bytes = (await getBlob(c.blob_ref)) || (c.body ? new Uint8Array(c.body) : null);
-    if (bytes) content.querySelector("img").src = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+    if (bytes) { sheetObjUrl = URL.createObjectURL(new Blob([bytes], { type: "image/png" })); content.querySelector("img").src = sheetObjUrl; }
   } else if (FILE_KINDS.has(kind)) {
     const whole = await getBlob(c.blob_ref);
     const entries = whole && decodeArchive(whole);
