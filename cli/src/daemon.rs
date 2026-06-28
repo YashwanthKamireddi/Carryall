@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clip_core::{Clip, NewClip};
 use clip_store::Store;
-use clip_sync::{decrypt, derive_key, encrypt, Key};
+use clip_sync::{decrypt, derive_key, encrypt, pack, unpack, Key};
 use clipboard_rs::{ClipboardContext, ClipboardHandler, ClipboardWatcher, ClipboardWatcherContext};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast;
@@ -71,14 +71,12 @@ pub fn data_dir() -> PathBuf {
 impl Ctx {
     /// Persist a freshly captured clip (dedup + blob externalize) and forward to sync.
     fn ingest(&self, new_clip: NewClip) {
-        use clip_core::ContentKind::{Audio, Files, Video};
         let new_clip = crate::blobs::externalize(&self.blob_dir, new_clip);
         // A file/folder selection too large to content-sync (e.g. a copied game
         // or a multi-GB folder, past the blob/archive caps) ends up with no blob.
         // Keep it in LOCAL history, but don't sync un-downloadable names to other
         // devices — so copying huge things locally stays local.
-        let syncable =
-            !(matches!(new_clip.kind, Files | Video | Audio) && new_clip.blob_ref.is_none());
+        let syncable = is_syncable(new_clip.kind, new_clip.blob_ref.is_some());
         let now = now_ms();
         let stored = {
             let store = match self.store.lock() {
@@ -125,7 +123,10 @@ pub async fn run() {
     };
     let blob_dir = dir.join("blobs");
     let _ = std::fs::create_dir_all(&blob_dir);
-    let (outgoing, _) = broadcast::channel(256);
+    // Generous buffer so a burst of copies while the sync link is momentarily
+    // busy doesn't lag the channel; anything that still slips past is recovered
+    // by the recent-clip replay on reconnect (see `sync_connection`).
+    let (outgoing, _) = broadcast::channel(1024);
     let ctx = Ctx {
         store: Arc::new(Mutex::new(store)),
         blob_dir,
@@ -554,6 +555,77 @@ fn url_encode(s: &str) -> String {
     out
 }
 
+/// How many recent clips to re-offer on each (re)connect. The receiver dedups,
+/// so this is pure catch-up insurance for clips captured while the link was down.
+const REPLAY_ON_CONNECT: i64 = 512;
+
+/// Blob chunks queued before forcing a socket flush — overlaps our encrypt work
+/// with the socket drain and cuts syscalls, while bounding buffered memory.
+const SEND_WINDOW: usize = 8;
+
+/// Whether a clip should be offered to other devices. A file/video/audio clip
+/// whose content was too large to externalize into a blob stays local-only
+/// (we'd otherwise sync un-downloadable file names). Mirrors the rule in
+/// [`Ctx::ingest`] so capture and replay agree.
+fn is_syncable(kind: clip_core::ContentKind, has_blob: bool) -> bool {
+    use clip_core::ContentKind::{Audio, Files, Video};
+    has_blob || !matches!(kind, Files | Video | Audio)
+}
+
+/// Send one clip to a peer: a compressed metadata frame, then (if present) its
+/// blob streamed as chunks. Used by both the live send path and the reconnect
+/// replay so the wire format lives in one place.
+async fn send_clip_frames<S>(
+    write: &mut S,
+    key: &Key,
+    clip: &Clip,
+    blob_dir: &std::path::Path,
+) -> Result<(), String>
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    // Metadata frame: gzip before encrypt (text/code/links shrink 60-80%).
+    // `send` flushes immediately — the common small-clip path stays low-latency.
+    if let Ok(json) = serde_json::to_vec(clip) {
+        write
+            .send(Message::Binary(encrypt(key, &pack(&json, true))))
+            .await
+            .map_err(|_| "send failed".to_string())?;
+    }
+
+    // Blob content: stream as chunks. Skip gzip — blobs are images/video/files
+    // that are already compressed, so it would only burn CPU.
+    if let Some(ref_) = clip.blob_ref.as_deref() {
+        if let Some(path) = crate::blobs::existing_path(blob_dir, ref_) {
+            if let Ok(bytes) = std::fs::read(&path) {
+                let n = bytes.len().div_ceil(crate::proto::CHUNK).max(1);
+                let mut in_window = 0usize;
+                for (i, part) in bytes.chunks(crate::proto::CHUNK).enumerate() {
+                    let frame = serde_json::json!({
+                        "blob_chunk": ref_, "i": i, "n": n, "b64": STANDARD.encode(part),
+                    });
+                    let ct = encrypt(key, &pack(&serde_json::to_vec(&frame).unwrap(), false));
+                    write
+                        .feed(Message::Binary(ct))
+                        .await
+                        .map_err(|_| "send failed".to_string())?;
+                    in_window += 1;
+                    if in_window >= SEND_WINDOW {
+                        write.flush().await.map_err(|_| "send failed".to_string())?;
+                        in_window = 0;
+                    }
+                }
+                if in_window > 0 {
+                    write.flush().await.map_err(|_| "send failed".to_string())?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn spawn_sync(ctx: Ctx, cfg: SyncConfig) {
     tokio::spawn(async move {
         let endpoint = format!(
@@ -590,7 +662,24 @@ async fn sync_connection(ctx: &Ctx, cfg: &SyncConfig, endpoint: &str) -> Result<
         .map_err(|e| e.to_string())?;
     eprintln!("carryall: sync connected");
     let (mut write, mut read) = ws.split();
+    // Subscribe BEFORE the replay so no clip captured during catch-up is missed.
     let mut outgoing = ctx.outgoing.subscribe();
+
+    // Catch-up: re-offer our recent clips so anything captured while the link
+    // was down (and dropped from the bounded broadcast channel) still
+    // propagates. The receiver dedups and ignores clips older than its start, so
+    // replay is idempotent and never clobbers a clipboard.
+    let replay: Vec<Clip> = ctx
+        .store
+        .lock()
+        .ok()
+        .and_then(|s| s.recent(REPLAY_ON_CONNECT).ok())
+        .unwrap_or_default();
+    for clip in replay.into_iter().rev() {
+        if is_syncable(clip.kind, clip.blob_ref.is_some()) {
+            send_clip_frames(&mut write, &cfg.key, &clip, &ctx.blob_dir).await?;
+        }
+    }
 
     // Clips waiting on their blob to finish transferring, keyed by blob_ref.
     let mut pending: HashMap<String, Clip> = HashMap::new();
@@ -600,39 +689,14 @@ async fn sync_connection(ctx: &Ctx, cfg: &SyncConfig, endpoint: &str) -> Result<
     loop {
         tokio::select! {
             local = outgoing.recv() => match local {
-                Ok(clip) => {
-                    // Send the clip metadata frame (bare Clip JSON — PWA-compatible).
-                    if let Ok(json) = serde_json::to_vec(&clip) {
-                        if write.send(Message::Binary(encrypt(&cfg.key, &json))).await.is_err() {
-                            return Err("send failed".into());
-                        }
-                    }
-                    // If it has a local blob (file/image content), stream it in chunks
-                    // so the real content lands on the other device.
-                    if let Some(ref_) = clip.blob_ref.as_deref() {
-                        if let Some(path) = crate::blobs::existing_path(&ctx.blob_dir, ref_) {
-                            if let Ok(bytes) = std::fs::read(&path) {
-                                let n = bytes.len().div_ceil(crate::proto::CHUNK).max(1);
-                                for (i, part) in bytes.chunks(crate::proto::CHUNK).enumerate() {
-                                    let frame = serde_json::json!({
-                                        "blob_chunk": ref_, "i": i, "n": n,
-                                        "b64": STANDARD.encode(part),
-                                    });
-                                    let ct = encrypt(&cfg.key, &serde_json::to_vec(&frame).unwrap());
-                                    if write.send(Message::Binary(ct)).await.is_err() {
-                                        return Err("send failed".into());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                Ok(clip) => send_clip_frames(&mut write, &cfg.key, &clip, &ctx.blob_dir).await?,
                 Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return Ok(()),
             },
             inbound = read.next() => match inbound {
                 Some(Ok(Message::Binary(data))) => {
-                    let Ok(plain) = decrypt(&cfg.key, &data) else { continue };
+                    let Ok(packed) = decrypt(&cfg.key, &data) else { continue };
+                    let plain = unpack(&packed);
                     let Ok(val) = serde_json::from_slice::<serde_json::Value>(&plain) else { continue };
 
                     // A delete event — remove the clip from history (cross-device delete).

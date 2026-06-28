@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use clip_core::Clip;
-use clip_sync::{decrypt, encrypt, Key};
+use clip_sync::{decrypt, encrypt, pack, unpack, Key};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::error::RecvError;
@@ -155,8 +155,8 @@ async fn serve(ctx: Ctx, key: Key, sock: TcpStream) -> std::io::Result<()> {
     // Reader loop: receive frames, apply.
     let mut inbound = Inbound::default();
     while let Ok(frame) = read_frame(&mut rd).await {
-        if let Ok(plain) = decrypt(&key, &frame) {
-            inbound.handle(&ctx, &plain);
+        if let Ok(packed) = decrypt(&key, &frame) {
+            inbound.handle(&ctx, &unpack(&packed));
         }
     }
     writer.abort();
@@ -245,9 +245,11 @@ async fn send_clip(
     ctx: &Ctx,
 ) -> std::io::Result<()> {
     use base64::{engine::general_purpose::STANDARD, Engine};
+    // Metadata frame: gzip before encrypt (text/code/links shrink 60-80%).
     if let Ok(json) = serde_json::to_vec(clip) {
-        write_frame(wr, &encrypt(key, &json)).await?;
+        write_frame(wr, &encrypt(key, &pack(&json, true))).await?;
     }
+    // Blob content: stream as chunks, skipping gzip (already-compressed bytes).
     if let Some(ref_) = clip.blob_ref.as_deref() {
         if let Some(path) = crate::blobs::existing_path(&ctx.blob_dir, ref_) {
             if let Ok(bytes) = std::fs::read(&path) {
@@ -256,7 +258,8 @@ async fn send_clip(
                     let frame = serde_json::json!({
                         "blob_chunk": ref_, "i": i, "n": n, "b64": STANDARD.encode(part),
                     });
-                    write_frame(wr, &encrypt(key, &serde_json::to_vec(&frame).unwrap())).await?;
+                    let payload = pack(&serde_json::to_vec(&frame).unwrap(), false);
+                    write_frame(wr, &encrypt(key, &payload)).await?;
                 }
             }
         }

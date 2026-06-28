@@ -35,14 +35,45 @@ async function deriveKey(secret, acct) {
     { name: "PBKDF2", salt: new Uint8Array(salt), iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
     base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
-async function decryptFrame(data) {
+// Transparent gzip applied *before* AES-GCM — ciphertext doesn't compress, so the
+// win must come first (text/code/links shrink 60-80%). Packed layout fed to the
+// cipher: codec(1) || payload, where 0 = raw and 1 = gzip. Byte-for-byte
+// compatible with the Rust daemon (gzip via the browser-native streams — no JS
+// dependency). Any other leading byte = an older untagged frame, passed through.
+async function gzipBytes(u8) {
+  const cs = new CompressionStream("gzip");
+  const w = cs.writable.getWriter(); w.write(u8); w.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+async function gunzipBytes(u8) {
+  const ds = new DecompressionStream("gzip");
+  const w = ds.writable.getWriter(); w.write(u8); w.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+async function pack(u8, tryGzip) {
+  if (tryGzip) {
+    try {
+      const gz = await gzipBytes(u8);
+      if (gz.length < u8.length) { const o = new Uint8Array(gz.length + 1); o[0] = 1; o.set(gz, 1); return o; }
+    } catch {} // no CompressionStream (ancient browser) → fall back to raw
+  }
+  const o = new Uint8Array(u8.length + 1); o[0] = 0; o.set(u8, 1); return o;
+}
+async function unpack(u8) {
+  if (u8.length === 0) return u8;
+  if (u8[0] === 1) { try { return await gunzipBytes(u8.subarray(1)); } catch { return new Uint8Array(0); } }
+  if (u8[0] === 0) return u8.subarray(1);
+  return u8; // untagged legacy frame
+}
+async function aesDecrypt(data) {
   const u = new Uint8Array(data);
   const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: u.slice(0, 12) }, key, u.slice(12));
-  return JSON.parse(dec.decode(pt));
+  return unpack(new Uint8Array(pt));
 }
 async function encryptClip(clip) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(clip))));
+  const packed = await pack(enc.encode(JSON.stringify(clip)), true);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, packed));
   const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out;
 }
 async function sha256Hex(s) {
@@ -276,12 +307,26 @@ async function getBlob(ref) {
 // Record a completed blob: RAM + persisted to disk so it survives reload.
 function saveBlob(ref, bytes) { blobs.set(ref, bytes); dbPutBlob(ref, bytes); persistedBlobRefs.add(ref); }
 
+// Drop blob transfers that stalled (peer went away mid-stream) so a file never
+// shows "receiving…" forever. The clip stays in history as metadata; a reconnect
+// backlog re-send restarts the transfer cleanly.
+const BLOB_STALL_MS = 90_000;
+function sweepStalledBlobs() {
+  const now = Date.now(); let changed = false;
+  for (const [ref, e] of pendingBlobs) {
+    if (now - (e.touched || 0) > BLOB_STALL_MS) { pendingBlobs.delete(ref); changed = true; }
+  }
+  if (changed) render();
+}
+setInterval(sweepStalledBlobs, 30_000);
+
 function onChunk(frame) {
   const { blob_chunk: ref, i, n, b64 } = frame;
   if (!ref || typeof n !== "number") return;
   if (hasBlob(ref)) return; // already have the whole blob — ignore backlog re-sends
   let e = pendingBlobs.get(ref);
-  if (!e) { e = { parts: new Array(n).fill(null), have: 0 }; pendingBlobs.set(ref, e); }
+  if (!e) { e = { parts: new Array(n).fill(null), have: 0, touched: Date.now() }; pendingBlobs.set(ref, e); }
+  e.touched = Date.now(); // keep alive while chunks keep arriving
   if (i < e.parts.length && e.parts[i] === null) {
     const bin = atob(b64); const u = new Uint8Array(bin.length);
     for (let k = 0; k < bin.length; k++) u[k] = bin.charCodeAt(k);
@@ -537,7 +582,8 @@ async function streamBlob(ref, bytes) {
     const part = bytes.subarray(i * CHUNK, (i + 1) * CHUNK);
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const frame = { blob_chunk: ref, i, n, b64: b64encode(part) };
-    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(frame))));
+    const packed = await pack(enc.encode(JSON.stringify(frame)), false); // already-compressed bytes
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, packed));
     const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12);
     ws.send(out);
   }
@@ -627,8 +673,7 @@ function openWs(url) {
   ws.onmessage = async (e) => {
     let pt;
     try {
-      const u = new Uint8Array(e.data);
-      pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: u.slice(0, 12) }, key, u.slice(12));
+      pt = await aesDecrypt(e.data);
     } catch {
       // Decrypt failed — almost always a passphrase/account mismatch. Warn once
       // after a few consecutive failures with nothing ever decrypting.

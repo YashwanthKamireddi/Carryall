@@ -54,8 +54,12 @@ pub fn router() -> Router {
 ///
 /// Both are optional; with neither set the relay is a single in-memory instance.
 pub async fn router_from_env() -> Router {
-    let mut hub = match std::env::var("CLIP_RELAY_DB") {
-        Ok(path) if !path.is_empty() => match SqliteBacklog::open(&path, 500) {
+    // A durable SQLite backlog is the DEFAULT so a relay restart never drops a
+    // device's offline catch-up. Override the location with `CLIP_RELAY_DB=<path>`,
+    // or set it to `memory` to opt out. A failed open degrades to in-memory
+    // (logged) rather than refusing to start.
+    fn open_backlog(path: &str) -> Hub {
+        match SqliteBacklog::open(path, 500) {
             Ok(store) => {
                 eprintln!("clip-relay: durable backlog at {path}");
                 Hub::with_backlog(256, Box::new(store))
@@ -64,8 +68,19 @@ pub async fn router_from_env() -> Router {
                 eprintln!("clip-relay: backlog open failed ({e}); using in-memory");
                 Hub::default()
             }
-        },
-        _ => Hub::default(),
+        }
+    }
+    let mut hub = match std::env::var("CLIP_RELAY_DB").ok().as_deref() {
+        Some("memory") | Some("none") | Some("off") => {
+            eprintln!("clip-relay: in-memory backlog (offline catch-up lost on restart)");
+            Hub::default()
+        }
+        Some(path) if !path.is_empty() => open_backlog(path),
+        _ => open_backlog(
+            &std::env::temp_dir()
+                .join("carryall-relay-backlog.db")
+                .to_string_lossy(),
+        ),
     };
 
     let redis_url = std::env::var("CLIP_REDIS_URL")

@@ -318,6 +318,7 @@ dependencies = [
  "aes-gcm",
  "blake3",
  "clip-core",
+ "flate2",
  "pbkdf2",
  "rand_core",
  "serde",

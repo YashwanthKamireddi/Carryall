@@ -43,8 +43,11 @@ impl Dedup {
     }
 }
 
-/// Raw bytes per blob chunk before base64 (kept in sync across transports).
-pub const CHUNK: usize = 48 * 1024;
+/// Raw bytes per blob chunk before base64 (kept in sync across transports, and
+/// matched to the PWA's 256 KiB). Larger chunks mean far fewer per-chunk
+/// encrypt/serialize/send operations on big files; one chunk base64s to ~341 KiB
+/// — comfortably under both the relay (8 MiB) and LAN (16 MiB) frame caps.
+pub const CHUNK: usize = 256 * 1024;
 
 /// Max clips held awaiting their blob. Normal in-flight is ~1; this only bounds
 /// memory if a peer streams metadata whose blob never completes. The clip is

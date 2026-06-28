@@ -12,11 +12,13 @@
 //!   (files/video) — beating the "use AirDrop instead" punt.
 
 pub mod chunk;
+pub mod compress;
 pub mod crypto;
 pub mod event;
 pub mod hlc;
 
 pub use chunk::{chunk, chunk_hashes, CHUNK_SIZE};
+pub use compress::{pack, unpack};
 pub use crypto::{decrypt, derive_key, encrypt, CryptoError, Key};
 pub use event::{merge, ClipEvent, Op};
 pub use hlc::Hlc;
