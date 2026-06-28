@@ -709,11 +709,18 @@ fn spawn_sync(ctx: Ctx, cfg: SyncConfig) {
         // *content* only when it was never sent (captured while offline) — not
         // on every reconnect (which would saturate the uplink). Bounded.
         let mut streamed = crate::proto::Dedup::new(4096);
+        // Start of the window of clips that may have been missed while we were
+        // disconnected from the relay. On reconnect we replay ONLY this gap — not
+        // the whole history — so clearing on another device isn't undone by the
+        // daemon re-pushing its master history. First connect: gap is empty.
+        let mut gap_since = now_ms();
         loop {
             let started = Instant::now();
-            if let Err(e) = sync_connection(&ctx, &cfg, &endpoint, &mut streamed).await {
+            if let Err(e) = sync_connection(&ctx, &cfg, &endpoint, &mut streamed, gap_since).await {
                 eprintln!("carryall: sync ended: {e}");
             }
+            // Clips captured from now until the next successful connect are the gap.
+            gap_since = now_ms();
             if started.elapsed() >= Duration::from_secs(10) {
                 backoff = Duration::from_secs(1); // was genuinely connected → reset
             }
@@ -728,6 +735,7 @@ async fn sync_connection(
     cfg: &SyncConfig,
     endpoint: &str,
     streamed: &mut crate::proto::Dedup,
+    gap_since: i64,
 ) -> Result<(), String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use std::collections::HashMap;
@@ -740,20 +748,18 @@ async fn sync_connection(
     // Subscribe BEFORE the replay so no clip captured during catch-up is missed.
     let mut outgoing = ctx.outgoing.subscribe();
 
-    // Catch-up: re-offer our recent clips so anything captured while the link
-    // was down (and dropped from the bounded broadcast channel) still
-    // propagates. The receiver dedups and ignores clips older than its start, so
-    // replay is idempotent and never clobbers a clipboard.
+    // Catch-up: re-offer ONLY clips captured during the disconnect gap (since
+    // `gap_since`), not the whole history. Replaying the full store on every
+    // reconnect re-pushed clips other devices had cleared — making "clear" look
+    // like it didn't stick and flooding the phone with old items on each refresh.
+    // Metadata only (no blob chunks): catch-up stays small and fast; live copies
+    // still stream their blobs via the live arm below.
     let replay: Vec<Clip> = ctx
         .store
         .lock()
         .ok()
-        .and_then(|s| s.recent(REPLAY_ON_CONNECT).ok())
+        .and_then(|s| s.clips_since(gap_since, REPLAY_ON_CONNECT).ok())
         .unwrap_or_default();
-    // Replay METADATA ONLY (no blob chunks): catch-up should be small and fast,
-    // not a re-upload of every recent image/video. Live copies still stream
-    // their blobs (see the live arm below, which uses `streamed`); a peer
-    // missing old media re-fetches it on the next copy.
     for clip in replay.into_iter().rev() {
         if is_syncable(clip.kind, clip.blob_ref.is_some()) {
             send_clip_frames(&mut write, &cfg.key, &clip, &ctx.blob_dir, false).await?;

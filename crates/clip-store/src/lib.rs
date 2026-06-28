@@ -172,6 +172,19 @@ impl Store {
         rows.collect()
     }
 
+    /// Clips captured at/after `since_ms` (newest first, bounded). Used by the
+    /// daemon to replay ONLY the gap captured while it was disconnected from the
+    /// relay — never its whole history, which would re-push (and resurrect)
+    /// clips that other devices have since cleared.
+    pub fn clips_since(&self, since_ms: i64, limit: i64) -> Result<Vec<Clip>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, preview, body, blob_ref, size, created_at, pinned, html \
+             FROM clips WHERE created_at >= ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![since_ms, limit], row_to_clip)?;
+        rows.collect()
+    }
+
     /// Full-text search over previews. Falls back gracefully if the query has no
     /// usable terms. Pinned-first, then recency.
     pub fn search(&self, query: &str, limit: i64) -> Result<Vec<Clip>> {
@@ -415,6 +428,20 @@ mod tests {
         assert_eq!(left[0].preview, "keep me");
         // The cleared clip is tombstoned, so a stale backlog replay can't revive it.
         assert_eq!(store.tombstoned_at(&cleared_id).unwrap(), Some(6000));
+    }
+
+    #[test]
+    fn clips_since_returns_only_the_gap() {
+        let store = Store::open_in_memory().unwrap();
+        store.insert(text_clip("old-before-gap"), 1000).unwrap();
+        store.insert(text_clip("new-in-gap"), 5000).unwrap();
+        // Replaying since t=3000 returns only clips captured at/after it — so the
+        // daemon never re-pushes (resurrects) history older than the disconnect.
+        let gap = store.clips_since(3000, 100).unwrap();
+        assert_eq!(gap.len(), 1);
+        assert_eq!(gap[0].preview, "new-in-gap");
+        // A first-connect watermark at/after the newest clip replays nothing.
+        assert!(store.clips_since(6000, 100).unwrap().is_empty());
     }
 
     #[test]
