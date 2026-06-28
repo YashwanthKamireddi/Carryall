@@ -100,8 +100,31 @@ pub fn files_clip(files: Vec<String>) -> Option<NewClip> {
     })
 }
 
+/// Clipboard format markers that mean "don't store this" — password managers and
+/// transient/one-shot copies. Matched case-insensitively as substrings of the
+/// platform format names, so one list covers macOS (`org.nspasteboard.*`),
+/// Windows (`ExcludeClipboardContentFromMonitorProcessing`) and X11/KDE hints.
+/// This mirrors the Wayland path's skip, giving the same privacy on every OS.
+fn is_sensitive_format(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    const MARKERS: &[&str] = &[
+        "concealed",           // macOS org.nspasteboard.ConcealedType
+        "transient",           // macOS org.nspasteboard.TransientType
+        "passwordmanagerhint", // X11 / KDE
+        "x-kde-passwordmanager",
+        "excludeclipboardcontentfrommonitorprocessing", // Windows
+    ];
+    MARKERS.iter().any(|m| n.contains(m))
+}
+
 /// Capture via a clipboard-rs context (X11/Win/macOS). Priority: image → files → text.
 pub fn from_clipboard_rs(ctx: &ClipboardContext) -> Option<NewClip> {
+    // Don't capture password-manager / transient clips — same privacy as Wayland.
+    if let Ok(formats) = ctx.available_formats() {
+        if formats.iter().any(|f| is_sensitive_format(f)) {
+            return None;
+        }
+    }
     if ctx.has(ContentFormat::Image) {
         if let Ok(img) = ctx.get_image() {
             if let Ok(png) = img.to_png() {
@@ -188,4 +211,30 @@ fn truncate(s: &str, max: usize) -> String {
     let mut out: String = s.chars().take(max).collect();
     out.push('…');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_sensitive_format;
+
+    #[test]
+    fn detects_sensitive_clipboard_markers_cross_os() {
+        for f in [
+            "org.nspasteboard.ConcealedType",
+            "org.nspasteboard.TransientType",
+            "x-kde-passwordManagerHint",
+            "application/x-kde-passwordManagerHint",
+            "ExcludeClipboardContentFromMonitorProcessing",
+        ] {
+            assert!(is_sensitive_format(f), "should skip: {f}");
+        }
+        for f in [
+            "text/plain",
+            "public.utf8-plain-text",
+            "image/png",
+            "CF_TEXT",
+        ] {
+            assert!(!is_sensitive_format(f), "should keep: {f}");
+        }
+    }
 }
