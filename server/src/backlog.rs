@@ -58,6 +58,11 @@ impl BacklogStore for MemoryBacklog {
     }
 }
 
+/// Backstop against an unauthenticated relay accruing unbounded rooms (anyone
+/// can connect with any account string): cap total retained frames across all
+/// accounts, evicting the globally-oldest. Far above a personal relay's needs.
+const GLOBAL_FRAME_CAP: i64 = 100_000;
+
 /// SQLite-backed backlog: survives relay restarts.
 pub struct SqliteBacklog {
     cap: usize,
@@ -68,7 +73,10 @@ impl SqliteBacklog {
     pub fn open(path: &str, cap: usize) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch(
+            // `busy_timeout` lets a second process (e.g. a restart overlap) wait
+            // for the writer instead of failing and silently dropping a frame.
             r#"PRAGMA journal_mode = WAL;
+               PRAGMA busy_timeout = 5000;
                CREATE TABLE IF NOT EXISTS frames (
                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
                    account     TEXT NOT NULL,
@@ -101,6 +109,12 @@ impl BacklogStore for SqliteBacklog {
             "DELETE FROM frames WHERE account = ?1 AND id NOT IN \
              (SELECT id FROM frames WHERE account = ?1 ORDER BY id DESC LIMIT ?2)",
             params![account, self.cap as i64],
+        );
+        // Global backstop so an unbounded number of rooms can't fill the disk.
+        let _ = conn.execute(
+            "DELETE FROM frames WHERE id NOT IN \
+             (SELECT id FROM frames ORDER BY id DESC LIMIT ?1)",
+            params![GLOBAL_FRAME_CAP],
         );
     }
 

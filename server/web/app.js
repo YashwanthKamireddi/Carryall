@@ -45,10 +45,24 @@ async function gzipBytes(u8) {
   const w = cs.writable.getWriter(); w.write(u8); w.close();
   return new Uint8Array(await new Response(cs.readable).arrayBuffer());
 }
+const MAX_DECOMPRESSED = 256 * 1024 * 1024; // gzip-bomb ceiling (matches the daemon)
 async function gunzipBytes(u8) {
   const ds = new DecompressionStream("gzip");
   const w = ds.writable.getWriter(); w.write(u8); w.close();
-  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+  // Read incrementally and abort past the cap, instead of buffering it all —
+  // so a tiny hostile frame can't inflate to gigabytes and crash the tab.
+  const reader = ds.readable.getReader();
+  const chunks = []; let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > MAX_DECOMPRESSED) { try { await reader.cancel(); } catch {} throw new Error("decompressed too large"); }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total); let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
 }
 async function pack(u8, tryGzip) {
   if (tryGzip) {
@@ -249,7 +263,10 @@ function cellHtml(c) {
   const label = KIND_LABEL[kind] ? KIND_LABEL[kind] + " · " : "";
   let meta = `${label}<span class="age" data-t="${c.created_at}">${relTime(c.created_at)}</span>`;
   if (FILE_KINDS.has(kind) && !hasBlob(c.blob_ref) && c.blob_ref) {
-    meta += " · receiving…"; // the download button itself signals "ready"
+    // Show real transfer progress instead of a bare "receiving…".
+    const e = pendingBlobs.get(c.blob_ref);
+    const pct = e && e.parts.length ? Math.floor((e.have / e.parts.length) * 100) : 0;
+    meta += e ? ` · receiving ${pct}%` : " · receiving…";
   }
   // Only offer the download affordance once the blob has actually arrived.
   const actionGlyph = FILE_KINDS.has(kind) && hasBlob(c.blob_ref) ? DOWNLOAD_SVG : null;
@@ -289,7 +306,8 @@ function ingest(clip, persist = true) {
 
 // ---------- received blobs (file/image content reassembled from chunks) ----------
 const FILE_KINDS = new Set(["files", "video", "audio"]);
-const pendingBlobs = new Map(); // ref -> { parts:[], have, n }
+const pendingBlobs = new Map(); // ref -> { parts:[], have, n, touched }
+let lastProgressRender = 0; // throttles the "receiving N%" re-render
 const blobs = new Map(); // ref -> Uint8Array (complete, in RAM)
 const persistedBlobRefs = new Set(); // refs whose bytes are saved in IndexedDB (may not be in RAM)
 
@@ -338,6 +356,11 @@ function onChunk(frame) {
     for (const p of e.parts) { whole.set(p, off); off += p.length; }
     saveBlob(ref, whole); pendingBlobs.delete(ref);
     render(); // a file row may now be ready to download
+  } else {
+    // Live-update the "receiving N%" label, throttled so a fast multi-chunk
+    // stream doesn't re-render the whole list on every frame.
+    const now = Date.now();
+    if (now - lastProgressRender > 150) { lastProgressRender = now; render(); }
   }
 }
 

@@ -580,6 +580,7 @@ async fn send_clip_frames<S>(
     key: &Key,
     clip: &Clip,
     blob_dir: &std::path::Path,
+    stream_blob: bool,
 ) -> Result<(), String>
 where
     S: futures_util::Sink<Message> + Unpin,
@@ -595,8 +596,11 @@ where
             .map_err(|_| "send failed".to_string())?;
     }
 
-    // Blob content: stream as chunks. Skip gzip — blobs are images/video/files
-    // that are already compressed, so it would only burn CPU.
+    // Blob content: stream as chunks (only when asked — see `stream_blob`). Skip
+    // gzip; blobs are images/video/files that are already compressed.
+    if !stream_blob {
+        return Ok(());
+    }
     if let Some(ref_) = clip.blob_ref.as_deref() {
         if let Some(path) = crate::blobs::existing_path(blob_dir, ref_) {
             if let Ok(bytes) = std::fs::read(&path) {
@@ -606,7 +610,10 @@ where
                     let frame = serde_json::json!({
                         "blob_chunk": ref_, "i": i, "n": n, "b64": STANDARD.encode(part),
                     });
-                    let ct = encrypt(key, &pack(&serde_json::to_vec(&frame).unwrap(), false));
+                    let Ok(frame_bytes) = serde_json::to_vec(&frame) else {
+                        continue;
+                    };
+                    let ct = encrypt(key, &pack(&frame_bytes, false));
                     write
                         .feed(Message::Binary(ct))
                         .await
@@ -626,6 +633,17 @@ where
     Ok(())
 }
 
+/// Whether a clip's blob *content* should be streamed now: only the first time
+/// we send a given blob ref on a live link. `streamed` is the bounded set of
+/// refs already sent — so a reconnect replay re-streams a blob only if it was
+/// never delivered (captured while offline), not on every reconnect.
+fn should_stream_blob(clip: &Clip, streamed: &mut crate::proto::Dedup) -> bool {
+    match clip.blob_ref.as_deref() {
+        Some(r) => streamed.insert_new(r),
+        None => false,
+    }
+}
+
 fn spawn_sync(ctx: Ctx, cfg: SyncConfig) {
     tokio::spawn(async move {
         let endpoint = format!(
@@ -639,9 +657,14 @@ fn spawn_sync(ctx: Ctx, cfg: SyncConfig) {
         // connection that stayed up a while resets the backoff to stay snappy.
         use std::time::{Duration, Instant};
         let mut backoff = Duration::from_secs(1);
+        // Blob refs we've already streamed at least once on a live connection.
+        // Persists across reconnects so the catch-up replay re-sends a blob's
+        // *content* only when it was never sent (captured while offline) — not
+        // on every reconnect (which would saturate the uplink). Bounded.
+        let mut streamed = crate::proto::Dedup::new(4096);
         loop {
             let started = Instant::now();
-            if let Err(e) = sync_connection(&ctx, &cfg, &endpoint).await {
+            if let Err(e) = sync_connection(&ctx, &cfg, &endpoint, &mut streamed).await {
                 eprintln!("carryall: sync ended: {e}");
             }
             if started.elapsed() >= Duration::from_secs(10) {
@@ -653,7 +676,12 @@ fn spawn_sync(ctx: Ctx, cfg: SyncConfig) {
     });
 }
 
-async fn sync_connection(ctx: &Ctx, cfg: &SyncConfig, endpoint: &str) -> Result<(), String> {
+async fn sync_connection(
+    ctx: &Ctx,
+    cfg: &SyncConfig,
+    endpoint: &str,
+    streamed: &mut crate::proto::Dedup,
+) -> Result<(), String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use std::collections::HashMap;
 
@@ -677,7 +705,8 @@ async fn sync_connection(ctx: &Ctx, cfg: &SyncConfig, endpoint: &str) -> Result<
         .unwrap_or_default();
     for clip in replay.into_iter().rev() {
         if is_syncable(clip.kind, clip.blob_ref.is_some()) {
-            send_clip_frames(&mut write, &cfg.key, &clip, &ctx.blob_dir).await?;
+            let stream_blob = should_stream_blob(&clip, streamed);
+            send_clip_frames(&mut write, &cfg.key, &clip, &ctx.blob_dir, stream_blob).await?;
         }
     }
 
@@ -689,7 +718,10 @@ async fn sync_connection(ctx: &Ctx, cfg: &SyncConfig, endpoint: &str) -> Result<
     loop {
         tokio::select! {
             local = outgoing.recv() => match local {
-                Ok(clip) => send_clip_frames(&mut write, &cfg.key, &clip, &ctx.blob_dir).await?,
+                Ok(clip) => {
+                    let stream_blob = should_stream_blob(&clip, streamed);
+                    send_clip_frames(&mut write, &cfg.key, &clip, &ctx.blob_dir, stream_blob).await?;
+                }
                 Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => return Ok(()),
             },

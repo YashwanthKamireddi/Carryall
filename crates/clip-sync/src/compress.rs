@@ -10,9 +10,11 @@
 //! - `0x00` — payload is the raw bytes.
 //! - `0x01` — payload is gzip-compressed bytes.
 //!
-//! Any other leading byte is treated as raw, untagged data, so a frame produced
-//! before this scheme existed (e.g. sitting in a relay backlog) still decodes.
-//! gzip (RFC 1952) is used so the browser PWA can pack/unpack with the native
+//! Any other leading byte is treated as untagged data and returned unchanged.
+//! Every frame this codebase produced before the scheme existed is JSON (starts
+//! with `{`, 0x7B), so those still decode; the fallback is not a general escape
+//! for arbitrary bytes that happen to begin with 0x00/0x01. gzip (RFC 1952) is
+//! used so the browser PWA can pack/unpack with the native
 //! `CompressionStream`/`DecompressionStream` APIs — no JS dependency.
 
 use std::io::{Read, Write};
@@ -23,6 +25,14 @@ use flate2::Compression;
 
 const RAW: u8 = 0x00;
 const GZIP: u8 = 0x01;
+
+/// Hard ceiling on a single frame's decompressed size — defense against a
+/// "gzip bomb". Frames are AEAD-encrypted so the relay can't forge one, but a
+/// peer sharing the account key could send a tiny frame that inflates to
+/// gigabytes and OOM-kills a daemon or the phone tab. This sits far above any
+/// real payload (the relay caps a frame at 8 MiB *compressed*, and natural text
+/// inflates only a few-fold), so it never truncates a legitimate clip.
+const MAX_DECOMPRESSED: usize = 256 * 1024 * 1024;
 
 /// Wrap `plaintext` with a codec byte, gzip-compressing when `try_gzip` is set
 /// *and* it actually shrinks the data (tiny payloads gzip larger). The returned
@@ -52,16 +62,24 @@ pub fn pack(plaintext: &[u8], try_gzip: bool) -> Vec<u8> {
 /// frame), so the scheme stays backward compatible. Returns an empty vec if a
 /// gzip payload is corrupt — the caller's parse then simply skips that frame.
 pub fn unpack(data: &[u8]) -> Vec<u8> {
+    unpack_capped(data, MAX_DECOMPRESSED)
+}
+
+/// [`unpack`] with an explicit inflation ceiling (so the cap is unit-testable).
+fn unpack_capped(data: &[u8], max: usize) -> Vec<u8> {
     match data.first() {
         Some(&GZIP) => {
+            // Bound the reader: a gzip stream that inflates past `max` is treated
+            // as hostile and dropped, rather than allocated in full.
             let mut out = Vec::new();
-            match GzDecoder::new(&data[1..]).read_to_end(&mut out) {
-                Ok(_) => out,
-                Err(_) => Vec::new(),
+            let mut reader = GzDecoder::new(&data[1..]).take(max as u64 + 1);
+            match reader.read_to_end(&mut out) {
+                Ok(_) if out.len() <= max => out,
+                _ => Vec::new(), // corrupt, or over the cap → drop the frame
             }
         }
         Some(&RAW) => data[1..].to_vec(),
-        // Untagged legacy frame (e.g. JSON starting with `{`): pass through.
+        // Untagged legacy frame (JSON starting with `{`): pass through.
         _ => data.to_vec(),
     }
 }
@@ -113,5 +131,20 @@ mod tests {
         let data: Vec<u8> = (0..=255u8).cycle().take(10_000).collect();
         let packed = pack(&data, true);
         assert_eq!(unpack(&packed), data);
+    }
+
+    #[test]
+    fn decompression_over_cap_is_rejected() {
+        // A small gzip frame that inflates well past a tiny cap → dropped (empty),
+        // never allocated in full. Models the gzip-bomb defense.
+        let big = vec![0u8; 100_000];
+        let packed = pack(&big, true);
+        assert_eq!(packed[0], GZIP);
+        assert!(
+            unpack_capped(&packed, 1024).is_empty(),
+            "over-cap → dropped"
+        );
+        // Under a generous cap it still round-trips.
+        assert_eq!(unpack_capped(&packed, 1_000_000), big);
     }
 }

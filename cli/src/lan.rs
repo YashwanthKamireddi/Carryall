@@ -258,8 +258,10 @@ async fn send_clip(
                     let frame = serde_json::json!({
                         "blob_chunk": ref_, "i": i, "n": n, "b64": STANDARD.encode(part),
                     });
-                    let payload = pack(&serde_json::to_vec(&frame).unwrap(), false);
-                    write_frame(wr, &encrypt(key, &payload)).await?;
+                    let Ok(frame_bytes) = serde_json::to_vec(&frame) else {
+                        continue;
+                    };
+                    write_frame(wr, &encrypt(key, &pack(&frame_bytes, false))).await?;
                 }
             }
         }
