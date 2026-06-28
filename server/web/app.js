@@ -653,6 +653,15 @@ async function sendImage(file) {
 }
 
 // Send non-image files bundled as one archive (real files on the other side).
+const VIDEO_EXT = /\.(mp4|mov|mkv|webm|avi|m4v)$/i;
+const AUDIO_EXT = /\.(mp3|wav|flac|aac|ogg|m4a)$/i;
+// Classify a selection so a video shows as video (icon/filter) and the desktop
+// applies it as such. Mirrors the daemon's files_kind().
+function filesKind(names) {
+  if (names.length && names.every((n) => VIDEO_EXT.test(n))) return "video";
+  if (names.length && names.every((n) => AUDIO_EXT.test(n))) return "audio";
+  return "files";
+}
 async function sendFiles(files) {
   const items = await Promise.all(files.map(async (f) => ({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) })));
   const archive = buildArchive(items);
@@ -661,12 +670,16 @@ async function sendFiles(files) {
   const names = files.map((f) => f.name);
   let preview = names.join(", ");
   if (preview.length > 48) preview = `${names[0]} +${names.length - 1} more`;
-  const clip = { id: ref, kind: "files", preview, body: [...enc.encode(files.map((f) => f.name).join("\n"))],
+  const clip = { id: ref, kind: filesKind(names), preview, body: [...enc.encode(files.map((f) => f.name).join("\n"))],
     blob_ref: ref, size: archive.byteLength, created_at: Date.now(), pinned: false };
   saveBlob(ref, archive);
   ws.send(await encryptClip(clip));
   await streamBlob(ref, archive);
   ingest(clip);
+  // On a computer this lands straight on the system clipboard (just paste). The
+  // phone shows a download button instead, because phone OSes don't let an app
+  // write files to the clipboard — that's the only difference.
+  toast(files.length > 1 ? `Sent ${files.length} files — paste on your PC` : "Sent — paste it on your PC");
 }
 
 // Size caps mirror the desktop daemon (cli/src/blobs.rs): full-quality transfer,
