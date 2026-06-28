@@ -30,10 +30,12 @@ pub struct Ctx {
     pub store: Arc<Mutex<Store>>,
     pub blob_dir: PathBuf,
     pub outgoing: broadcast::Sender<Clip>,
-    /// Content-hash the monitor should ignore once — set right before we write
-    /// an incoming synced clip to the native clipboard, so we don't re-capture
-    /// and re-broadcast our own write (which would loop between devices).
-    pub suppress: Arc<Mutex<Option<String>>>,
+    /// Content dedup-ids the monitor should ignore once — armed right before we
+    /// write an incoming synced clip to the native clipboard, so we don't
+    /// re-capture and re-broadcast our own write (which would loop between
+    /// devices, duplicating every phone-sent clip). A bounded TTL set (not a
+    /// single slot) so back-to-back applies don't clobber each other.
+    pub suppress: Arc<SuppressSet>,
     /// Daemon start time (ms). Only clips created at/after this auto-apply to
     /// the native clipboard — so a relay backlog replay on reconnect refills
     /// history WITHOUT clobbering whatever is currently on your clipboard.
@@ -47,9 +49,45 @@ pub struct Ctx {
 impl Ctx {
     /// True if `id` was just applied by us and should be skipped by the monitor.
     fn take_suppressed(&self, id: &str) -> bool {
-        let mut g = self.suppress.lock().unwrap();
-        if g.as_deref() == Some(id) {
-            *g = None;
+        self.suppress.take(id)
+    }
+}
+
+/// A small, TTL-bounded set of content dedup-ids we just wrote to the native
+/// clipboard, so the monitor's resulting capture is recognized as our own echo
+/// and not re-broadcast. Keyed by the *monitor's* dedup-id of the content (not
+/// the incoming clip's id, whose scheme — e.g. the PWA's `img-`/`web-`/`f-`
+/// hashes — differs), so suppression actually matches. A set with a short TTL
+/// (not one slot) handles back-to-back applies and never wedges a future
+/// genuine re-copy of the same content.
+#[derive(Default)]
+pub struct SuppressSet {
+    inner: Mutex<std::collections::VecDeque<(String, std::time::Instant)>>,
+}
+
+impl SuppressSet {
+    const TTL: std::time::Duration = std::time::Duration::from_secs(10);
+    const CAP: usize = 32;
+
+    /// Mark `id` as a write we expect the monitor to echo back shortly.
+    pub fn arm(&self, id: String) {
+        let mut q = self.inner.lock().unwrap();
+        let now = std::time::Instant::now();
+        q.retain(|(_, t)| now.duration_since(*t) < Self::TTL);
+        q.push_back((id, now));
+        while q.len() > Self::CAP {
+            q.pop_front();
+        }
+    }
+
+    /// Consume `id` if armed and still fresh (one-shot). Returns true if it was
+    /// our own echo (so the caller skips re-broadcasting it).
+    pub fn take(&self, id: &str) -> bool {
+        let mut q = self.inner.lock().unwrap();
+        let now = std::time::Instant::now();
+        q.retain(|(_, t)| now.duration_since(*t) < Self::TTL);
+        if let Some(pos) = q.iter().position(|(s, _)| s == id) {
+            q.remove(pos);
             return true;
         }
         false
@@ -131,7 +169,7 @@ pub async fn run() {
         store: Arc::new(Mutex::new(store)),
         blob_dir,
         outgoing,
-        suppress: Arc::new(Mutex::new(None)),
+        suppress: Arc::new(SuppressSet::default()),
         started: now_ms(),
         applied: Arc::new(Mutex::new(crate::proto::Dedup::new(8192))),
     };
@@ -830,30 +868,54 @@ pub(crate) fn finalize_apply(ctx: &Ctx, mut clip: Clip) {
         }
     }
 
-    // For file-like clips, turn the synced blob into a real local file and point
-    // the clip at it so it pastes as an actual file.
-    if matches!(
-        clip.kind,
-        ContentKind::Files | ContentKind::Video | ContentKind::Audio
-    ) {
-        if let Some(ref_) = clip.blob_ref.clone() {
-            let paths = crate::blobs::materialize_archive(&ctx.blob_dir, &ref_);
-            if !paths.is_empty() {
-                let locals: Vec<String> = paths
-                    .iter()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .collect();
-                clip.body = Some(locals.join("\n").into_bytes());
-                // Predict the id our monitor will derive from these paths so the
-                // suppress-guard matches and we don't re-broadcast.
-                let uris: Vec<String> = locals.iter().map(|l| format!("file://{l}")).collect();
-                if let Some(nc) = crate::capture::files_clip(uris) {
-                    *ctx.suppress.lock().unwrap() = Some(nc.dedup_id());
+    // Arm the suppress-guard with the dedup-id the monitor WILL compute from the
+    // content we're about to write — so our own write isn't re-captured and
+    // re-broadcast (which duplicated every phone-sent clip). We also arm the
+    // incoming clip.id as a belt-and-suspenders fallback.
+    ctx.suppress.arm(clip.id.clone());
+    match clip.kind {
+        ContentKind::Files | ContentKind::Video | ContentKind::Audio => {
+            if let Some(ref_) = clip.blob_ref.clone() {
+                let paths = crate::blobs::materialize_archive(&ctx.blob_dir, &ref_);
+                if !paths.is_empty() {
+                    let locals: Vec<String> = paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect();
+                    clip.body = Some(locals.join("\n").into_bytes());
+                    // The monitor derives its id from the file:// uri-list.
+                    let uris: Vec<String> = locals.iter().map(|l| format!("file://{l}")).collect();
+                    if let Some(nc) = crate::capture::files_clip(uris) {
+                        ctx.suppress.arm(nc.dedup_id());
+                    }
                 }
             }
         }
-    } else {
-        *ctx.suppress.lock().unwrap() = Some(clip.id.clone());
+        ContentKind::Image => {
+            // The monitor captures the PNG bytes and hashes them; arm that id.
+            let png = clip
+                .blob_ref
+                .as_deref()
+                .and_then(|r| crate::blobs::read(&ctx.blob_dir, r))
+                .or_else(|| clip.body.clone());
+            if let Some(p) = png {
+                if let Some(nc) = crate::capture::image_clip(p) {
+                    ctx.suppress.arm(nc.dedup_id());
+                }
+            }
+        }
+        _ => {
+            // Text/link/code/color/rich: the monitor re-classifies the text and
+            // hashes it. Arm the id it will produce from the exact text written.
+            let text = clip
+                .body
+                .as_deref()
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| clip.preview.clone());
+            if let Some(nc) = crate::capture::text_clip_html(&text, clip.html.clone()) {
+                ctx.suppress.arm(nc.dedup_id());
+            }
+        }
     }
     crate::apply::to_native_clipboard(&clip, &ctx.blob_dir);
 }
@@ -880,8 +942,22 @@ fn should_apply(
 
 #[cfg(test)]
 mod tests {
-    use super::{account_salt, should_apply, url_encode};
+    use super::{account_salt, should_apply, url_encode, SuppressSet};
     use crate::proto::Dedup;
+
+    #[test]
+    fn suppress_set_is_one_shot_and_handles_concurrent_arms() {
+        let s = SuppressSet::default();
+        // Two back-to-back applies both suppressed (a single slot would lose one).
+        s.arm("a".into());
+        s.arm("b".into());
+        assert!(s.take("b"));
+        assert!(s.take("a"));
+        // One-shot: a later genuine re-copy of the same content is NOT suppressed.
+        assert!(!s.take("a"));
+        // Unknown id is never suppressed.
+        assert!(!s.take("never-armed"));
+    }
 
     #[test]
     fn account_salt_pads_bytes_not_chars() {

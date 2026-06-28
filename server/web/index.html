@@ -62,11 +62,15 @@
       .hidden { display: none !important; }
 
       /* Large-title nav (solid; thin material feel) */
-      .nav { padding: 10px 20px 6px; display: flex; align-items: center; gap: 10px; }
-      .nav h1 { font-size: 30px; font-weight: 700; letter-spacing: .36px; }
-      #status { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
-        font-size: 12px; color: var(--label2); padding: 5px 11px; border-radius: 999px;
+      .nav { padding: 10px 20px 6px; display: flex; align-items: center; gap: 8px; }
+      /* Title shrinks/ellipsizes so the action buttons (incl. Sign out) always
+         fit on a narrow phone — previously the last button overflowed off-screen. */
+      .nav h1 { font-size: 30px; font-weight: 700; letter-spacing: .36px;
+        min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #status { margin-left: auto; flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px;
+        font-size: 12px; color: var(--label2); padding: 5px 11px; border-radius: 999px; overflow: hidden;
         background: var(--card); border: .5px solid var(--bar-stroke); text-transform: lowercase; }
+      #status #status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       #status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--label3); }
       /* Nav action button (Clear history — 2-tap confirm to avoid accidents) */
       .navbtn { flex: 0 0 auto; border: none; background: var(--card); color: var(--label2);
