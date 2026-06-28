@@ -131,62 +131,168 @@ fn generate_passphrase() -> String {
     }
 }
 
-/// Install autostart. Linux: a systemd `--user` unit. Other OSes: a clear manual
-/// hint (never an error) — the daemon still runs fine with `carryall daemon`.
+/// Install autostart so the daemon runs on every login — one-shot on each OS:
+/// systemd `--user` on Linux, a launchd agent on macOS, a hidden Startup-folder
+/// launcher on Windows. Every step degrades to a clear manual hint, never an
+/// error — `carryall daemon` always works by hand.
 fn install_autostart() {
     #[cfg(target_os = "linux")]
-    {
-        let Ok(home) = std::env::var("HOME") else {
-            println!("  (no HOME set — start manually: carryall daemon &)");
-            return;
-        };
-        let home = std::path::Path::new(&home);
+    install_autostart_linux();
+    #[cfg(target_os = "macos")]
+    install_autostart_macos();
+    #[cfg(target_os = "windows")]
+    install_autostart_windows();
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    println!("  ℹ Autostart isn't wired for this OS — run `carryall daemon` at login.");
+}
 
-        // 1. Put the binary where the unit expects it (~/.local/bin/carryall).
-        let bin_dir = home.join(".local/bin");
-        let _ = std::fs::create_dir_all(&bin_dir);
-        let target = bin_dir.join("carryall");
-        if let Ok(exe) = std::env::current_exe() {
-            if exe != target {
-                let _ = std::fs::remove_file(&target); // avoid ETXTBSY on a running binary
-                let _ = std::fs::copy(&exe, &target);
-            }
-        }
-
-        // 2. Write the user service unit.
-        let unit_dir = home.join(".config/systemd/user");
-        if std::fs::create_dir_all(&unit_dir).is_err() {
-            println!("  (couldn't create the systemd dir — start manually: carryall daemon &)");
-            return;
-        }
-        let unit = "[Unit]\nDescription=Carryall clipboard daemon (background capture + E2E sync)\n\
-                    After=graphical-session.target\nPartOf=graphical-session.target\n\n\
-                    [Service]\nExecStart=%h/.local/bin/carryall daemon\nRestart=on-failure\nRestartSec=3\n\n\
-                    [Install]\nWantedBy=graphical-session.target\n";
-        if std::fs::write(unit_dir.join("carryall-daemon.service"), unit).is_err() {
-            println!("  (couldn't write the service file — start manually: carryall daemon &)");
-            return;
-        }
-
-        // 3. Enable + start it.
-        let run = |args: &[&str]| {
-            std::process::Command::new("systemctl")
-                .args(args)
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        };
-        if run(&["--user", "daemon-reload"])
-            && run(&["--user", "enable", "--now", "carryall-daemon"])
-        {
-            println!("  ✓ Autostart enabled — Carryall runs on every login.");
-        } else {
-            println!("  (systemctl --user unavailable — start manually: carryall daemon &)");
-        }
+/// Copy our running binary to a stable location the autostart entry points at,
+/// so it never references a temporary build path. Returns the path to use in the
+/// autostart entry (the deployed copy, or the current exe if a copy isn't
+/// possible). Only compiled where an autostart backend exists.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn deploy_binary(target: &std::path::Path) -> std::path::PathBuf {
+    if let Some(dir) = target.parent() {
+        let _ = std::fs::create_dir_all(dir);
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        println!("  ℹ Autostart is set up automatically on Linux. On this OS, add");
-        println!("    `carryall daemon` to your login items to run it in the background.");
+    let Ok(exe) = std::env::current_exe() else {
+        return target.to_path_buf();
+    };
+    if exe == target {
+        return exe;
+    }
+    let _ = std::fs::remove_file(target); // avoid ETXTBSY on a running binary
+    if std::fs::copy(&exe, target).is_ok() {
+        target.to_path_buf()
+    } else {
+        exe // couldn't copy — point the entry at where we are now
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn install_autostart_linux() {
+    let Ok(home) = std::env::var("HOME") else {
+        println!("  (no HOME set — start manually: carryall daemon &)");
+        return;
+    };
+    let home = std::path::Path::new(&home);
+
+    // Put the binary where the unit expects it (~/.local/bin/carryall).
+    deploy_binary(&home.join(".local/bin/carryall"));
+
+    // Write the user service unit.
+    let unit_dir = home.join(".config/systemd/user");
+    if std::fs::create_dir_all(&unit_dir).is_err() {
+        println!("  (couldn't create the systemd dir — start manually: carryall daemon &)");
+        return;
+    }
+    let unit = "[Unit]\nDescription=Carryall clipboard daemon (background capture + E2E sync)\n\
+                After=graphical-session.target\nPartOf=graphical-session.target\n\n\
+                [Service]\nExecStart=%h/.local/bin/carryall daemon\nRestart=on-failure\nRestartSec=3\n\n\
+                [Install]\nWantedBy=graphical-session.target\n";
+    if std::fs::write(unit_dir.join("carryall-daemon.service"), unit).is_err() {
+        println!("  (couldn't write the service file — start manually: carryall daemon &)");
+        return;
+    }
+
+    // Enable + start it.
+    let run = |args: &[&str]| {
+        std::process::Command::new("systemctl")
+            .args(args)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    if run(&["--user", "daemon-reload"]) && run(&["--user", "enable", "--now", "carryall-daemon"]) {
+        println!("  ✓ Autostart enabled — Carryall runs on every login.");
+    } else {
+        println!("  (systemctl --user unavailable — start manually: carryall daemon &)");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn install_autostart_macos() {
+    let Ok(home) = std::env::var("HOME") else {
+        println!("  (no HOME set — start manually: carryall daemon &)");
+        return;
+    };
+    let home = std::path::Path::new(&home);
+    let bin = deploy_binary(&home.join(".local/bin/carryall"));
+
+    let agents = home.join("Library/LaunchAgents");
+    if std::fs::create_dir_all(&agents).is_err() {
+        println!("  (couldn't create LaunchAgents — start manually: carryall daemon &)");
+        return;
+    }
+    let label = "com.carryall.daemon";
+    let plist_path = agents.join(format!("{label}.plist"));
+    let plist = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\"><dict>\n\
+         \t<key>Label</key><string>{label}</string>\n\
+         \t<key>ProgramArguments</key><array><string>{bin}</string><string>daemon</string></array>\n\
+         \t<key>RunAtLoad</key><true/>\n\
+         \t<key>KeepAlive</key><true/>\n\
+         </dict></plist>\n",
+        bin = bin.display(),
+    );
+    if std::fs::write(&plist_path, plist).is_err() {
+        println!("  (couldn't write the launch agent — start manually: carryall daemon &)");
+        return;
+    }
+    // Reload: drop any previous copy (ignore errors), then load the new one.
+    let _ = std::process::Command::new("launchctl")
+        .arg("unload")
+        .arg(&plist_path)
+        .status();
+    let loaded = std::process::Command::new("launchctl")
+        .arg("load")
+        .arg(&plist_path)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if loaded {
+        println!("  ✓ Autostart enabled (launchd) — Carryall runs on every login.");
+    } else {
+        println!("  (launchctl unavailable — start manually: carryall daemon &)");
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn install_autostart_windows() {
+    // Copy to a stable per-user location, then drop a launcher in the Startup
+    // folder. A .vbs runs the daemon with a hidden window (0), so there's no
+    // console flash at login.
+    let Ok(local) = std::env::var("LOCALAPPDATA") else {
+        println!("  (no LOCALAPPDATA — start manually: carryall daemon)");
+        return;
+    };
+    let bin = deploy_binary(
+        &std::path::Path::new(&local)
+            .join("Carryall")
+            .join("carryall.exe"),
+    );
+
+    let Ok(roaming) = std::env::var("APPDATA") else {
+        println!("  (no APPDATA — start manually: carryall daemon)");
+        return;
+    };
+    let startup =
+        std::path::Path::new(&roaming).join("Microsoft\\Windows\\Start Menu\\Programs\\Startup");
+    if std::fs::create_dir_all(&startup).is_err() {
+        println!("  (couldn't access the Startup folder — start manually: carryall daemon)");
+        return;
+    }
+    // VBS quotes the path with Chr(34); window style 0 = hidden, wait = False.
+    let vbs = format!(
+        "Set s = CreateObject(\"WScript.Shell\")\r\n\
+         s.Run Chr(34) & \"{bin}\" & Chr(34) & \" daemon\", 0, False\r\n",
+        bin = bin.display(),
+    );
+    if std::fs::write(startup.join("carryall.vbs"), vbs).is_ok() {
+        println!("  ✓ Autostart enabled (Startup folder) — Carryall runs on every login.");
+    } else {
+        println!("  (couldn't write the Startup entry — start manually: carryall daemon)");
     }
 }
