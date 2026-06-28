@@ -462,7 +462,7 @@ async function togglePin(c) {
   if (c.pinned) popId = c.id; // spring-pop the pin on (one-shot, consumed by render)
   haptic(c.pinned ? 14 : 8);
   render(); toast(c.pinned ? "Pinned" : "Unpinned");
-  if (ws?.readyState === 1 && key) { try { ws.send(await encryptClip({ pin: c.id, pinned: c.pinned })); } catch {} }
+  if (key) wsSend(await encryptClip({ pin: c.id, pinned: c.pinned }));
 }
 function applyPin(id, pinned) {
   const c = clips.get(id); if (!c || !!c.pinned === !!pinned) return;
@@ -477,7 +477,7 @@ async function deleteClip(c) {
   clips.delete(c.id); dbDel(c.id); forgetBlob(c.blob_ref);
   tombstones.set(c.id, at); dbTombstone(c.id, at); render(); toast("Deleted");
   // Propagate the delete to your other devices (desktop daemon + other phones).
-  if (ws?.readyState === 1 && key) { try { ws.send(await encryptClip({ delete: c.id })); } catch {} }
+  if (key) wsSend(await encryptClip({ delete: c.id }));
 }
 function applyDelete(id) {
   tombstones.set(id, Date.now()); dbTombstone(id, Date.now());
@@ -513,8 +513,8 @@ async function clearAll() {
     tombstones.set(c.id, at); dbTombstone(c.id, at);
   }
   render(); haptic([5, 24, 5]); toast(`Cleared ${toClear.length}`);
-  if (ws?.readyState === 1 && key) {
-    for (const c of toClear) { try { ws.send(await encryptClip({ delete: c.id })); } catch {} }
+  if (key) {
+    for (const c of toClear) wsSend(await encryptClip({ delete: c.id }));
   }
 }
 
@@ -568,15 +568,15 @@ async function openSheet(c) {
 
 // Send a text/link clip (shared by the composer and the preview-sheet "Send edit").
 async function sendText(text) {
-  if (!text || ws?.readyState !== 1) return false;
+  if (!text) return false;
   haptic(10);
   const kind = isUrl(text) ? "link" : "text";
   const body = [...enc.encode(text)];
   const clip = { id: "web-" + (await sha256Hex(kind + "\0" + text)), kind,
     preview: text.length > 400 ? text.slice(0, 400) + "…" : text, body, blob_ref: null,
     size: body.length, created_at: Date.now(), pinned: false };
-  ws.send(await encryptClip(clip));
-  ingest(clip);
+  ingest(clip);                          // always keep it locally, even offline
+  wsSend(await encryptClip(clip));       // queued + flushed on reconnect if offline
   return true;
 }
 async function send() {
@@ -623,7 +623,7 @@ async function streamBlob(ref, bytes) {
     const packed = await pack(enc.encode(JSON.stringify(frame)), false); // already-compressed bytes
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, packed));
     const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12);
-    ws.send(out);
+    wsSend(out);
   }
 }
 
@@ -647,7 +647,7 @@ async function sendImage(file) {
   const ref = "img-" + (await sha256Hex(b64encode(full)));
   const clip = { id: ref, kind: "image", preview, body, blob_ref: ref, size: full.byteLength, created_at: Date.now(), pinned: false };
   saveBlob(ref, full); // so our own list can act on it too (and survive reload)
-  ws.send(await encryptClip(clip));
+  wsSend(await encryptClip(clip));
   await streamBlob(ref, full);
   ingest(clip);
 }
@@ -673,7 +673,7 @@ async function sendFiles(files) {
   const clip = { id: ref, kind: filesKind(names), preview, body: [...enc.encode(files.map((f) => f.name).join("\n"))],
     blob_ref: ref, size: archive.byteLength, created_at: Date.now(), pinned: false };
   saveBlob(ref, archive);
-  ws.send(await encryptClip(clip));
+  wsSend(await encryptClip(clip));
   await streamBlob(ref, archive);
   ingest(clip);
   // On a computer this lands straight on the system clipboard (just paste). The
@@ -691,7 +691,7 @@ const fmtMB = (b) => (b / 1048576).toFixed(b < 10485760 ? 1 : 0) + " MB";
 // Dispatch a selection: images send as images, the rest bundle as files.
 async function sendAttachments(fileList) {
   let all = [...fileList];
-  if (!all.length || ws?.readyState !== 1) return;
+  if (!all.length) return;
   // Reject individually-too-big files up front with a clear message.
   const toobig = all.filter((f) => f.size > MAX_FILE_BYTES);
   all = all.filter((f) => f.size <= MAX_FILE_BYTES);
@@ -710,13 +710,32 @@ async function sendAttachments(fileList) {
 let wsBackoff = 1000;       // exponential reconnect backoff (1s → 30s), reset on connect
 let wsUrl = null;           // last relay URL, so we can reconnect on foreground
 let wsReconnectTimer = null;
+
+// Outbound queue: a frame sent while the socket is closed/reconnecting (common
+// on mobile when the app resumes) is held and flushed on reconnect — so a send
+// on a flaky link is never silently lost. Byte-bounded so a large transfer
+// queued while fully offline can't blow up memory.
+const outbox = [];
+let outboxBytes = 0;
+const OUTBOX_MAX_BYTES = 64 * 1024 * 1024;
+function wsSend(bytes) {
+  if (ws && ws.readyState === 1) { try { ws.send(bytes); return true; } catch {} }
+  if (outboxBytes + bytes.length <= OUTBOX_MAX_BYTES) { outbox.push(bytes); outboxBytes += bytes.length; return true; }
+  return false; // overflow: a huge fully-offline transfer — sent again on a fresh copy
+}
+function flushOutbox() {
+  while (outbox.length && ws && ws.readyState === 1) {
+    try { ws.send(outbox[0]); outboxBytes -= outbox[0].length; outbox.shift(); }
+    catch { break; }
+  }
+}
 function openWs(url) {
   wsUrl = url;
   if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
   setStatus("connecting…", "connecting");
   ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";
-  ws.onopen = () => { setStatus("synced", "on"); wsBackoff = 1000; };
+  ws.onopen = () => { setStatus("synced", "on"); wsBackoff = 1000; flushOutbox(); };
   ws.onclose = () => {
     setStatus("reconnecting…", "connecting");
     // Back off so an unreachable relay isn't retried every 2s (battery drain on
@@ -837,7 +856,7 @@ document.addEventListener("dragover", (e) => { e.preventDefault(); document.body
 document.addEventListener("dragleave", (e) => { if (e.relatedTarget === null) document.body.classList.remove("dragging"); });
 document.addEventListener("drop", (e) => {
   e.preventDefault(); document.body.classList.remove("dragging");
-  if (e.dataTransfer?.files?.length && ws?.readyState === 1) sendAttachments(e.dataTransfer.files);
+  if (e.dataTransfer?.files?.length) sendAttachments(e.dataTransfer.files);
 });
 $("search").addEventListener("input", (e) => {
   query = e.target.value;

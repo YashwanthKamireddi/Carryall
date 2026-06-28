@@ -43,7 +43,7 @@ pub fn gen_origin() -> String {
 
 impl Default for Hub {
     fn default() -> Self {
-        Self::new(256, 500)
+        Self::new(512, 2000)
     }
 }
 

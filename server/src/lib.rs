@@ -62,10 +62,14 @@ pub async fn router_from_env() -> Router {
     // `CLIP_RELAY_DB=<path>`, or set it to `memory` to opt out. A failed open
     // degrades to in-memory (logged) rather than refusing to start.
     fn open_backlog(path: &str) -> Hub {
-        match SqliteBacklog::open(path, 500) {
+        // Backlog sized to hold a full large transfer's chunks (a 2 GiB blob is
+        // ~8192 × 256 KiB frames). The old 500-frame cap silently dropped all but
+        // the tail of any big file, so a video sent while a device was offline was
+        // lost. A reconnecting device now replays enough to finish reassembling.
+        match SqliteBacklog::open(path, 12_000) {
             Ok(store) => {
                 eprintln!("clip-relay: durable backlog at {path}");
-                Hub::with_backlog(256, Box::new(store))
+                Hub::with_backlog(512, Box::new(store))
             }
             Err(e) => {
                 eprintln!("clip-relay: backlog open failed ({e}); using in-memory");
@@ -219,7 +223,11 @@ async fn client_loop(mut socket: WebSocket, hub: Arc<Hub>, account: String, devi
                     }
                 }
                 Ok(_) => {}
-                Err(RecvError::Lagged(_)) => {}
+                // This device fell too far behind the live channel (a fast large
+                // transfer outran a slow link). Dropping the socket forces it to
+                // reconnect and replay the backlog, so it catches up cleanly
+                // instead of silently losing the gap and corrupting a blob.
+                Err(RecvError::Lagged(_)) => break,
                 Err(RecvError::Closed) => break,
             },
         }
