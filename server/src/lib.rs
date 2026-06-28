@@ -62,11 +62,12 @@ pub async fn router_from_env() -> Router {
     // `CLIP_RELAY_DB=<path>`, or set it to `memory` to opt out. A failed open
     // degrades to in-memory (logged) rather than refusing to start.
     fn open_backlog(path: &str) -> Hub {
-        // Backlog sized to hold a full large transfer's chunks (a 2 GiB blob is
-        // ~8192 × 256 KiB frames). The old 500-frame cap silently dropped all but
-        // the tail of any big file, so a video sent while a device was offline was
-        // lost. A reconnecting device now replays enough to finish reassembling.
-        match SqliteBacklog::open(path, 12_000) {
+        // Backlog bounded by BYTES (24 MiB) — see backlog.rs. A frame-count cap
+        // let old media chunks pile to 100+ MB, which the relay then dumped at
+        // every reconnecting device and flooded phones into a reconnect loop. A
+        // byte budget keeps reconnect catch-up small and fast (recent clips
+        // replay; large media syncs live when both devices are online).
+        match SqliteBacklog::open(path, 24 * 1024 * 1024) {
             Ok(store) => {
                 eprintln!("clip-relay: durable backlog at {path}");
                 Hub::with_backlog(512, Box::new(store))

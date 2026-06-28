@@ -712,10 +712,13 @@ async fn sync_connection(
         .ok()
         .and_then(|s| s.recent(REPLAY_ON_CONNECT).ok())
         .unwrap_or_default();
+    // Replay METADATA ONLY (no blob chunks): catch-up should be small and fast,
+    // not a re-upload of every recent image/video. Live copies still stream
+    // their blobs (see the live arm below, which uses `streamed`); a peer
+    // missing old media re-fetches it on the next copy.
     for clip in replay.into_iter().rev() {
         if is_syncable(clip.kind, clip.blob_ref.is_some()) {
-            let stream_blob = should_stream_blob(&clip, streamed);
-            send_clip_frames(&mut write, &cfg.key, &clip, &ctx.blob_dir, stream_blob).await?;
+            send_clip_frames(&mut write, &cfg.key, &clip, &ctx.blob_dir, false).await?;
         }
     }
 

@@ -23,16 +23,24 @@ pub trait BacklogStore: Send + Sync {
     fn recent(&self, account: &str) -> Vec<Frame>;
 }
 
-/// In-memory backlog: a bounded deque per account.
+/// In-memory backlog: a per-account deque bounded by TOTAL BYTES.
+///
+/// Bounding by bytes (not frame count) is essential: frames range from ~200 B
+/// (a text clip) to ~350 KB (one base64'd blob chunk), so a frame-count cap let
+/// the backlog balloon to 100+ MB of old media chunks — which the relay then
+/// dumped at every reconnecting device, flooding phones into a reconnect loop.
+/// A byte budget keeps reconnect catch-up small and fast: recent clips replay;
+/// large media syncs live (both online) rather than re-streaming from history.
 pub struct MemoryBacklog {
-    cap: usize,
+    max_bytes: usize,
     rooms: Mutex<HashMap<String, VecDeque<Frame>>>,
 }
 
 impl MemoryBacklog {
-    pub fn new(cap: usize) -> Self {
+    /// `max_bytes`: per-account byte budget for retained frames.
+    pub fn new(max_bytes: usize) -> Self {
         Self {
-            cap,
+            max_bytes,
             rooms: Mutex::new(HashMap::new()),
         }
     }
@@ -43,8 +51,12 @@ impl BacklogStore for MemoryBacklog {
         let mut rooms = self.rooms.lock().unwrap();
         let q = rooms.entry(account.to_string()).or_default();
         q.push_back(frame.clone());
-        while q.len() > self.cap {
-            q.pop_front();
+        let mut total: usize = q.iter().map(|f| f.data.len()).sum();
+        // Evict oldest until under budget, but always keep at least one frame.
+        while q.len() > 1 && total > self.max_bytes {
+            if let Some(f) = q.pop_front() {
+                total -= f.data.len();
+            }
         }
     }
 
@@ -63,14 +75,16 @@ impl BacklogStore for MemoryBacklog {
 /// accounts, evicting the globally-oldest. Far above a personal relay's needs.
 const GLOBAL_FRAME_CAP: i64 = 100_000;
 
-/// SQLite-backed backlog: survives relay restarts.
+/// SQLite-backed backlog: survives relay restarts. Bounded per-account by TOTAL
+/// BYTES (see [`MemoryBacklog`] for why bytes, not frame count).
 pub struct SqliteBacklog {
-    cap: usize,
+    max_bytes: usize,
     conn: Mutex<Connection>,
 }
 
 impl SqliteBacklog {
-    pub fn open(path: &str, cap: usize) -> rusqlite::Result<Self> {
+    /// `max_bytes`: per-account byte budget for retained frames.
+    pub fn open(path: &str, max_bytes: usize) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch(
             // `busy_timeout` lets a second process (e.g. a restart overlap) wait
@@ -86,7 +100,7 @@ impl SqliteBacklog {
                CREATE INDEX IF NOT EXISTS frames_account ON frames(account, id);"#,
         )?;
         Ok(Self {
-            cap,
+            max_bytes,
             conn: Mutex::new(conn),
         })
     }
@@ -104,11 +118,16 @@ impl BacklogStore for SqliteBacklog {
         {
             return;
         }
-        // Prune to the most recent `cap` frames for this account.
+        // Prune to the most recent `max_bytes` for this account: delete any frame
+        // whose newer-frames-byte-total already reached the budget (the newest
+        // frame has 0 bytes ahead of it, so at least one is always kept).
         let _ = conn.execute(
-            "DELETE FROM frames WHERE account = ?1 AND id NOT IN \
-             (SELECT id FROM frames WHERE account = ?1 ORDER BY id DESC LIMIT ?2)",
-            params![account, self.cap as i64],
+            "DELETE FROM frames WHERE account = ?1 AND id IN (\
+               SELECT id FROM (\
+                 SELECT id, SUM(LENGTH(data)) OVER (ORDER BY id DESC) - LENGTH(data) AS before \
+                 FROM frames WHERE account = ?1\
+               ) WHERE before >= ?2)",
+            params![account, self.max_bytes as i64],
         );
         // Global backstop so an unbounded number of rooms can't fill the disk.
         let _ = conn.execute(
@@ -120,15 +139,18 @@ impl BacklogStore for SqliteBacklog {
 
     fn recent(&self, account: &str) -> Vec<Frame> {
         let conn = self.conn.lock().unwrap();
+        // Return the newest frames within the byte budget, oldest-first.
         let mut stmt = match conn.prepare(
-            "SELECT from_device, data FROM \
-             (SELECT id, from_device, data FROM frames WHERE account = ?1 ORDER BY id DESC LIMIT ?2) \
-             ORDER BY id ASC",
+            "SELECT from_device, data FROM (\
+               SELECT id, from_device, data, \
+                 SUM(LENGTH(data)) OVER (ORDER BY id DESC) - LENGTH(data) AS before \
+               FROM frames WHERE account = ?1\
+             ) WHERE before < ?2 ORDER BY id ASC",
         ) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        let rows = stmt.query_map(params![account, self.cap as i64], |r| {
+        let rows = stmt.query_map(params![account, self.max_bytes as i64], |r| {
             Ok(Frame {
                 from: r.get(0)?,
                 data: r.get(1)?,
@@ -154,13 +176,32 @@ mod tests {
 
     #[test]
     fn memory_bounds_and_orders() {
-        let b = MemoryBacklog::new(3);
+        let b = MemoryBacklog::new(3); // 3-byte budget; frames here are 1 byte
         for i in 0..5u8 {
             b.append("a", &f("d", &[i]));
         }
         let got: Vec<_> = b.recent("a").iter().map(|x| x.data[0]).collect();
-        assert_eq!(got, vec![2, 3, 4]); // last 3, oldest-first
+        assert_eq!(got, vec![2, 3, 4]); // newest 3 bytes, oldest-first
         assert!(b.recent("missing").is_empty());
+    }
+
+    #[test]
+    fn bounds_by_bytes_not_frame_count() {
+        // 50 × 100 B = 5000 B into a 1000 B budget → only the newest ~10 survive,
+        // proving a big-frame history can't balloon the backlog (the flood bug).
+        for store in [
+            Box::new(MemoryBacklog::new(1000)) as Box<dyn BacklogStore>,
+            Box::new(SqliteBacklog::open(&format!("{}/b.db", tempdir()), 1000).unwrap()),
+        ] {
+            for i in 0..50u8 {
+                store.append("a", &f("d", &[i; 100]));
+            }
+            let got = store.recent("a");
+            let total: usize = got.iter().map(|x| x.data.len()).sum();
+            assert!(total <= 1000, "within byte budget, got {total}");
+            assert!(!got.is_empty());
+            assert_eq!(got.last().unwrap().data[0], 49); // newest retained
+        }
     }
 
     #[test]

@@ -75,6 +75,8 @@
         transition: background .15s, color .15s, transform .14s var(--spring); }
       .navbtn:active { transform: scale(.93); }
       .navbtn.armed { background: rgba(255,69,58,.16); color: #ff453a; border-color: transparent; }
+      .navbtn.icon { padding: 6px 9px; } /* sign-out: fixed-width icon, no layout shift on confirm */
+      .navbtn.icon svg { width: 15px; height: 15px; display: block; }
       #status.on .dot { background: #30d158; }
       #status.connecting .dot { background: #ff9f0a; }
 
@@ -277,7 +279,7 @@
     </style>
   </head>
   <body>
-    <div class="nav hidden" id="nav"><h1>Carryall</h1><span id="status"><span class="dot"></span><span id="status-text">offline</span></span><button id="clearall" class="navbtn hidden" aria-label="Clear history">Clear</button></div>
+    <div class="nav hidden" id="nav"><h1>Carryall</h1><span id="status"><span class="dot"></span><span id="status-text">offline</span></span><button id="clearall" class="navbtn hidden" aria-label="Clear history">Clear</button><button id="signout" class="navbtn icon hidden" aria-label="Sign out"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></button></div>
 
     <div id="connect">
       <div class="hero">

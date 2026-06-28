@@ -31,6 +31,11 @@ pub struct Hub {
     bus: Option<std::sync::Arc<crate::bus::RedisBus>>,
 }
 
+/// Frames larger than this aren't kept in the catch-up backlog — they're blob
+/// chunks (~350 KB base64), which must not be replayed in bulk on reconnect.
+/// Clip metadata + text + control frames are well under this.
+const BACKLOG_MAX_FRAME_BYTES: usize = 16 * 1024;
+
 /// A unique-enough id for this relay process (for bus echo suppression).
 pub fn gen_origin() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,7 +48,7 @@ pub fn gen_origin() -> String {
 
 impl Default for Hub {
     fn default() -> Self {
-        Self::new(512, 2000)
+        Self::new(512, 8 * 1024 * 1024)
     }
 }
 
@@ -102,7 +107,15 @@ impl Hub {
 
     /// Append to this instance's backlog and broadcast to its live receivers.
     fn deliver_local(&self, account: &str, frame: Frame) -> usize {
-        self.backlog.append(account, &frame);
+        // Only small frames (clip metadata, text, pin/delete control) go in the
+        // catch-up backlog. Large blob chunks still fan out LIVE, but are not
+        // parked — replaying megabytes of old media at every reconnect floods
+        // clients (a phone over cellular) into a reconnect loop. Media syncs
+        // live when both devices are online; a reconnecting device catches up on
+        // recent clips instantly and re-fetches media on the next copy.
+        if frame.data.len() <= BACKLOG_MAX_FRAME_BYTES {
+            self.backlog.append(account, &frame);
+        }
         let rooms = self.rooms.lock().unwrap();
         match rooms.get(account) {
             Some(tx) => tx.send(frame).unwrap_or(0),

@@ -504,6 +504,24 @@ function onClearTap() {
   disarmClear();
   clearAll();
 }
+
+// Sign out / re-pair: clear saved credentials and return to onboarding (so you
+// can scan a different QR or switch accounts). 2-tap confirm via a toast so the
+// button doesn't change width. History stays in IndexedDB (keyed per account).
+let signoutArmed = false, signoutTimer = null;
+function onSignOutTap() {
+  const b = $("signout");
+  if (!signoutArmed) {
+    signoutArmed = true; b.classList.add("armed"); haptic(10);
+    toast("Tap again to sign out");
+    signoutTimer = setTimeout(() => { signoutArmed = false; b.classList.remove("armed"); }, 3000);
+    return;
+  }
+  clearTimeout(signoutTimer); signoutArmed = false; b.classList.remove("armed");
+  try { ws && ws.close(); } catch {}
+  ["clip.account", "clip.secret", "clip.relay"].forEach((k) => localStorage.removeItem(k));
+  location.reload(); // pre-paint sees no creds → clean onboarding to re-pair
+}
 async function clearAll() {
   const toClear = [...clips.values()].filter((c) => !c.pinned);
   if (!toClear.length) return;
@@ -819,6 +837,7 @@ function revealApp() {
   $("nav").classList.remove("hidden");
   $("searchbar").classList.remove("hidden");
   $("clearall").classList.remove("hidden");
+  $("signout").classList.remove("hidden");
   $("filters").classList.remove("hidden");
   $("list").classList.add("entering"); // one-shot smooth entrance
   setTimeout(() => $("list").classList.remove("entering"), 600);
@@ -830,6 +849,7 @@ function revealApp() {
 $("go").onclick = connect;
 $("send").onclick = send;
 $("clearall").onclick = onClearTap;
+$("signout").onclick = onSignOutTap;
 $("msg").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
 $("filters").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-filter]");
