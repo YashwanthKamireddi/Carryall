@@ -6,7 +6,11 @@ use clipboard_rs::{common::RustImage, Clipboard, ClipboardContext, ContentFormat
 
 const TEXT_PREVIEW_MAX: usize = 400;
 
-pub fn text_clip(text: &str) -> Option<NewClip> {
+/// Build a text clip, optionally carrying an HTML representation so a rich-text
+/// copy keeps its formatting when pasted on another device. The kind is still the
+/// plain-text classification (link/code/…), so the UI is unchanged; the HTML
+/// rides along for fidelity, and `body` keeps the plain text for plain pastes.
+pub fn text_clip_html(text: &str, html: Option<String>) -> Option<NewClip> {
     if text.trim().is_empty() {
         return None;
     }
@@ -17,6 +21,7 @@ pub fn text_clip(text: &str) -> Option<NewClip> {
         preview: truncate(text, TEXT_PREVIEW_MAX),
         body: Some(text.as_bytes().to_vec()),
         blob_ref: None,
+        html,
         size,
         id: None,
     })
@@ -37,6 +42,7 @@ pub fn image_clip(png: Vec<u8>) -> Option<NewClip> {
         preview,
         body: Some(png),
         blob_ref: Some(id.clone()),
+        html: None,
         size,
         id: Some(id),
     })
@@ -95,6 +101,7 @@ pub fn files_clip(files: Vec<String>) -> Option<NewClip> {
         preview,
         body: Some(joined.into_bytes()),
         blob_ref: None,
+        html: None,
         size,
         id: None,
     })
@@ -143,7 +150,10 @@ pub fn from_clipboard_rs(ctx: &ClipboardContext) -> Option<NewClip> {
     }
     if ctx.has(ContentFormat::Text) {
         if let Ok(text) = ctx.get_text() {
-            if let Some(c) = text_clip(&text) {
+            // Carry the HTML representation when the copy has one, so formatting
+            // survives paste on another device (plain text stays in `body`).
+            let html = ctx.get_html().ok().filter(|h| !h.trim().is_empty());
+            if let Some(c) = text_clip_html(&text, html) {
                 return Some(c);
             }
         }

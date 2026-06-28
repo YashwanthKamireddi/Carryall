@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS clips (
     blob_ref    TEXT,
     size        INTEGER NOT NULL,
     created_at  INTEGER NOT NULL,
-    pinned      INTEGER NOT NULL DEFAULT 0
+    pinned      INTEGER NOT NULL DEFAULT 0,
+    html        TEXT
 );
 
 CREATE INDEX IF NOT EXISTS clips_created_at ON clips(created_at DESC);
@@ -75,6 +76,14 @@ impl Store {
 
     fn init(conn: Connection) -> Result<Self> {
         conn.execute_batch(SCHEMA)?;
+        // Migration: add `html` to databases created before rich-text fidelity.
+        // (CREATE TABLE IF NOT EXISTS won't alter an existing table.) Idempotent.
+        let has_html = conn
+            .prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name = 'html'")?
+            .exists([])?;
+        if !has_html {
+            conn.execute("ALTER TABLE clips ADD COLUMN html TEXT", [])?;
+        }
         Ok(Self { conn })
     }
 
@@ -88,8 +97,8 @@ impl Store {
         self.conn
             .execute("DELETE FROM tombstones WHERE id = ?1", params![stored.id])?;
         self.conn.execute(
-            r#"INSERT INTO clips (id, kind, preview, body, blob_ref, size, created_at, pinned)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)
+            r#"INSERT INTO clips (id, kind, preview, body, blob_ref, size, created_at, pinned, html)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)
                ON CONFLICT(id) DO UPDATE SET created_at = excluded.created_at"#,
             params![
                 stored.id,
@@ -99,6 +108,7 @@ impl Store {
                 stored.blob_ref,
                 stored.size as i64,
                 stored.created_at,
+                stored.html,
             ],
         )?;
         // Return the canonical stored row (pinned flag may differ from a prior copy).
@@ -120,11 +130,12 @@ impl Store {
                 .execute("DELETE FROM tombstones WHERE id = ?1", params![c.id])?;
         }
         self.conn.execute(
-            r#"INSERT INTO clips (id, kind, preview, body, blob_ref, size, created_at, pinned)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            r#"INSERT INTO clips (id, kind, preview, body, blob_ref, size, created_at, pinned, html)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                ON CONFLICT(id) DO UPDATE SET
                  created_at = MAX(created_at, excluded.created_at),
-                 pinned = MAX(pinned, excluded.pinned)"#,
+                 pinned = MAX(pinned, excluded.pinned),
+                 html = COALESCE(excluded.html, html)"#,
             params![
                 c.id,
                 c.kind.as_str(),
@@ -134,6 +145,7 @@ impl Store {
                 c.size as i64,
                 c.created_at,
                 c.pinned as i64,
+                c.html,
             ],
         )?;
         Ok(())
@@ -142,7 +154,7 @@ impl Store {
     pub fn get(&self, id: &str) -> Result<Option<Clip>> {
         self.conn
             .query_row(
-                "SELECT id, kind, preview, body, blob_ref, size, created_at, pinned \
+                "SELECT id, kind, preview, body, blob_ref, size, created_at, pinned, html \
                  FROM clips WHERE id = ?1",
                 params![id],
                 row_to_clip,
@@ -153,7 +165,7 @@ impl Store {
     /// Most-recent clips first, pinned items always on top.
     pub fn recent(&self, limit: i64) -> Result<Vec<Clip>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, kind, preview, body, blob_ref, size, created_at, pinned \
+            "SELECT id, kind, preview, body, blob_ref, size, created_at, pinned, html \
              FROM clips ORDER BY pinned DESC, created_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], row_to_clip)?;
@@ -168,7 +180,7 @@ impl Store {
             return self.recent(limit);
         }
         let mut stmt = self.conn.prepare(
-            "SELECT c.id, c.kind, c.preview, c.body, c.blob_ref, c.size, c.created_at, c.pinned \
+            "SELECT c.id, c.kind, c.preview, c.body, c.blob_ref, c.size, c.created_at, c.pinned, c.html \
              FROM clips_fts f JOIN clips c ON c.rowid = f.rowid \
              WHERE clips_fts MATCH ?1 \
              ORDER BY c.pinned DESC, c.created_at DESC LIMIT ?2",
@@ -246,6 +258,7 @@ fn row_to_clip(row: &rusqlite::Row) -> rusqlite::Result<Clip> {
         preview: row.get(2)?,
         body: row.get(3)?,
         blob_ref: row.get(4)?,
+        html: row.get(8)?,
         size: size as u64,
         created_at: row.get(6)?,
         pinned: pinned != 0,
@@ -274,6 +287,7 @@ mod tests {
             preview: s.to_string(),
             body: Some(s.as_bytes().to_vec()),
             blob_ref: None,
+            html: None,
             size: s.len() as u64,
             id: None,
         }
@@ -287,6 +301,55 @@ mod tests {
         let recent = store.recent(10).unwrap();
         assert_eq!(recent.len(), 2);
         assert_eq!(recent[0].preview, "second item"); // newest first
+    }
+
+    #[test]
+    fn html_roundtrips_through_store() {
+        let store = Store::open_in_memory().unwrap();
+        let mut nc = text_clip("bold text");
+        nc.html = Some("<b>bold text</b>".into());
+        let id = store.insert(nc, 1000).unwrap().id;
+        assert_eq!(
+            store.get(&id).unwrap().unwrap().html.as_deref(),
+            Some("<b>bold text</b>")
+        );
+        assert_eq!(
+            store.recent(10).unwrap()[0].html.as_deref(),
+            Some("<b>bold text</b>")
+        );
+        // A plain clip keeps html None.
+        let pid = store.insert(text_clip("plain"), 2000).unwrap().id;
+        assert_eq!(store.get(&pid).unwrap().unwrap().html, None);
+    }
+
+    #[test]
+    fn migrates_a_pre_html_database() {
+        // Simulate an old DB: a `clips` table without the `html` column.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE clips (rowid INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, \
+             kind TEXT NOT NULL, preview TEXT NOT NULL, body BLOB, blob_ref TEXT, \
+             size INTEGER NOT NULL, created_at INTEGER NOT NULL, pinned INTEGER NOT NULL DEFAULT 0);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO clips (id, kind, preview, size, created_at) VALUES ('x','text','old',3,1)",
+            [],
+        )
+        .unwrap();
+        // init() must add the column and keep the existing row usable.
+        let store = Store::init(conn).unwrap();
+        let got = store.get("x").unwrap().unwrap();
+        assert_eq!(got.preview, "old");
+        assert_eq!(got.html, None);
+        // And new html writes work post-migration.
+        let mut nc = text_clip("rich");
+        nc.html = Some("<i>rich</i>".into());
+        let id = store.insert(nc, 9).unwrap().id;
+        assert_eq!(
+            store.get(&id).unwrap().unwrap().html.as_deref(),
+            Some("<i>rich</i>")
+        );
     }
 
     #[test]

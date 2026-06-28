@@ -344,6 +344,7 @@ mod tests {
             preview: "proj".into(),
             body: Some(proj.to_string_lossy().as_bytes().to_vec()),
             blob_ref: None,
+            html: None,
             size: 0,
             id: None,
         };

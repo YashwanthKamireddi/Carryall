@@ -41,6 +41,7 @@ async fn two_devices_sync_a_clip_end_to_end() {
         preview: "https://clip.app".into(),
         body: Some(b"https://clip.app".to_vec()),
         blob_ref: None,
+        html: None,
         size: 16,
         created_at: 1_700_000_000_000,
         pinned: false,

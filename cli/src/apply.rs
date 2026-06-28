@@ -10,7 +10,9 @@ use std::io::Write;
 use std::path::Path;
 
 use clip_core::{Clip, ContentKind};
-use clipboard_rs::{common::RustImage, Clipboard, ClipboardContext, RustImageData};
+use clipboard_rs::{
+    common::RustImage, Clipboard, ClipboardContent, ClipboardContext, RustImageData,
+};
 
 fn is_wayland() -> bool {
     std::env::var("WAYLAND_DISPLAY")
@@ -66,9 +68,23 @@ pub fn to_native_clipboard(clip: &Clip, blob_dir: &Path) {
         _ => {
             let text = body_text();
             if is_wayland() {
+                // wl-copy can't cleanly advertise text/html and text/plain in one
+                // shot, so paste stays plain here (no regression).
                 wl_copy(&[], text.as_bytes());
             } else if let Ok(ctx) = ClipboardContext::new() {
-                let _ = ctx.set_text(text);
+                match clip.html.clone() {
+                    // Offer both HTML and plain so formatting survives in rich
+                    // apps while plain-text targets still work.
+                    Some(html) => {
+                        let _ = ctx.set(vec![
+                            ClipboardContent::Text(text),
+                            ClipboardContent::Html(html),
+                        ]);
+                    }
+                    None => {
+                        let _ = ctx.set_text(text);
+                    }
+                }
             }
         }
     }

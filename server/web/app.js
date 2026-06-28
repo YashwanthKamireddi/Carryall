@@ -400,6 +400,21 @@ async function copyText(text) {
   const ok = (() => { try { return document.execCommand("copy"); } catch { return false; } })();
   document.body.removeChild(ta); return ok;
 }
+// Copy with formatting when the clip carries HTML: write both text/html and
+// text/plain so rich targets paste formatted and plain targets still work.
+// Falls back to plain text everywhere else.
+async function copyRich(plain, html) {
+  if (html && navigator.clipboard && window.isSecureContext && window.ClipboardItem) {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        "text/html": new Blob([html], { type: "text/html" }),
+        "text/plain": new Blob([plain], { type: "text/plain" }),
+      })]);
+      return true;
+    } catch {} // some browsers restrict text/html writes — fall back to plain
+  }
+  return copyText(plain);
+}
 
 // Returns true if the clip was COPIED to the clipboard (so the caller can give
 // a "copied" acknowledgment); false for downloads / not-yet-ready.
@@ -436,8 +451,8 @@ async function openClip(c) {
     downloadBlob(base + ".png", bytes, "image/png");
     toast("Downloading"); return false;
   }
-  // Text-like → copy.
-  const ok = await copyText(bytesToStr(c.body) || c.preview);
+  // Text-like → copy (with formatting when the clip carries HTML).
+  const ok = await copyRich(bytesToStr(c.body) || c.preview, c.html);
   toast(ok ? "Copied" : "Couldn't copy");
   return ok;
 }

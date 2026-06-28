@@ -418,7 +418,16 @@ fn read_wayland() -> Option<NewClip> {
             .collect();
         return capture::files_clip(files);
     }
-    capture::text_clip(&String::from_utf8_lossy(&read(MimeType::Text)?))
+    let plain = String::from_utf8_lossy(&read(MimeType::Text)?).into_owned();
+    // Carry HTML when present, so a rich-text copy keeps formatting on sync.
+    let html = if has("text/html") {
+        read(MimeType::Specific("text/html"))
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .filter(|h| !h.trim().is_empty())
+    } else {
+        None
+    };
+    capture::text_clip_html(&plain, html)
 }
 
 // ---- sync client ----

@@ -99,6 +99,11 @@ pub struct Clip {
     /// Content-addressed reference for large blobs stored outside the row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blob_ref: Option<String>,
+    /// HTML representation of a rich-text copy, so **formatting survives** paste
+    /// on other devices. `None` for plain content. The plain text stays in
+    /// `body`, so a plain paste is always available too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html: Option<String>,
     /// Byte size of the full content (not just the preview).
     pub size: u64,
     /// Unix millis when first captured.
@@ -114,6 +119,8 @@ pub struct NewClip {
     pub preview: String,
     pub body: Option<Vec<u8>>,
     pub blob_ref: Option<String>,
+    /// HTML for rich-text copies (see [`Clip::html`]); `None` for plain content.
+    pub html: Option<String>,
     pub size: u64,
     /// Precomputed dedup id. Set when the natural identity is *not* the inline
     /// body — e.g. an image whose `body` holds only a thumbnail but which must
@@ -146,6 +153,7 @@ impl NewClip {
             preview: self.preview,
             body: self.body,
             blob_ref: self.blob_ref,
+            html: self.html,
             size: self.size,
             created_at,
             pinned: false,
@@ -195,6 +203,7 @@ mod tests {
             preview: "hello".into(),
             body: Some(b"hello".to_vec()),
             blob_ref: None,
+            html: None,
             size: 5,
             id: None,
         };
@@ -209,6 +218,7 @@ mod tests {
             preview: "x".into(),
             body: Some(b"x".to_vec()),
             blob_ref: None,
+            html: None,
             size: 1,
             id: None,
         };
@@ -226,6 +236,7 @@ mod tests {
             preview: "Image".into(),
             body: Some(b"thumbnail-bytes".to_vec()),
             blob_ref: Some("fullhash".into()),
+            html: None,
             size: 999,
             id: Some("explicit-full-image-hash".into()),
         };
