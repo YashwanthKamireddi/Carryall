@@ -694,8 +694,12 @@ async function sendAttachments(fileList) {
 }
 
 // ---------- connection ----------
-let wsBackoff = 1000; // exponential reconnect backoff (1s → 30s), reset on connect
+let wsBackoff = 1000;       // exponential reconnect backoff (1s → 30s), reset on connect
+let wsUrl = null;           // last relay URL, so we can reconnect on foreground
+let wsReconnectTimer = null;
 function openWs(url) {
+  wsUrl = url;
+  if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
   setStatus("connecting…", "connecting");
   ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";
@@ -704,7 +708,7 @@ function openWs(url) {
     setStatus("reconnecting…", "connecting");
     // Back off so an unreachable relay isn't retried every 2s (battery drain on
     // mobile); resets to 1s once a connection succeeds.
-    setTimeout(() => openWs(url), wsBackoff);
+    wsReconnectTimer = setTimeout(() => openWs(url), wsBackoff);
     wsBackoff = Math.min(wsBackoff * 2, 30000);
   };
   ws.onerror = () => setStatus("error", "");
@@ -732,6 +736,19 @@ function openWs(url) {
     } catch {} // a single malformed frame shouldn't kill the stream
   };
 }
+
+// Reconnect instantly when the user returns or the network comes back, instead
+// of waiting out the backoff timer — so opening the app and sending feels
+// immediate (no cold-connection handshake delay). No-op if already connected.
+function ensureConnected() {
+  if (!wsUrl || !key) return;
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+  wsBackoff = 1000;
+  openWs(wsUrl);
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") ensureConnected(); });
+window.addEventListener("online", ensureConnected);
+window.addEventListener("focus", ensureConnected);
 
 async function connect() {
   account = $("account").value.trim();

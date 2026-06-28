@@ -173,8 +173,25 @@ async fn client_loop(mut socket: WebSocket, hub: Arc<Hub>, account: String, devi
         }
     }
 
+    // Keep the connection warm: a ping every 30s stops idle WebSockets (a phone
+    // behind a Cloudflare Tunnel, cellular NAT, etc.) from being dropped, so the
+    // next send is instant instead of paying a reconnect handshake. Clients
+    // auto-respond with pong; no app-level traffic.
+    // First tick after 30s (not immediately — a fresh connection needs no ping,
+    // and an at-connect ping would race ahead of the first real frame).
+    let mut keepalive = tokio::time::interval_at(
+        tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+        std::time::Duration::from_secs(30),
+    );
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         tokio::select! {
+            _ = keepalive.tick() => {
+                if socket.send(Message::Ping(Vec::new())).await.is_err() {
+                    break;
+                }
+            }
             inbound = socket.recv() => match inbound {
                 Some(Ok(Message::Binary(data))) => {
                     if data.len() <= MAX_FRAME_BYTES {

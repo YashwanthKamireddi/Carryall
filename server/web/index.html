@@ -48,6 +48,11 @@
         }
       }
       * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+      /* App-like feel: long-pressing a clip opens the preview sheet, never the
+         browser's blue "select all" highlight or iOS copy callout. Editable
+         fields stay fully selectable. */
+      body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+      input, textarea, [contenteditable] { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
       html, body { height: 100%; background: var(--bg); color: var(--label); font-family: var(--font);
         -webkit-font-smoothing: antialiased; font-feature-settings: "tnum" 1; overscroll-behavior: none; }
       body { display: flex; flex-direction: column; height: 100dvh; padding: env(safe-area-inset-top) 0 0; }
