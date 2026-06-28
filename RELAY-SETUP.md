@@ -15,7 +15,8 @@ only**; the tunnel is its single entrypoint.
 ---
 
 ## Prerequisites
-- A domain (you have one on Namecheap). We'll use a subdomain, e.g. `clip.yourdomain.com`.
+- A domain you own (any registrar — name.com, Namecheap, etc.). We'll use a
+  subdomain, e.g. `clip.yourdomain.com`.
 - `carryall-relay` built or installed. From source: `cargo build --release -p carryall-relay`
   → binary at `target/release/carryall-relay`. Copy it onto your PATH:
   ```bash
@@ -24,14 +25,27 @@ only**; the tunnel is its single entrypoint.
 
 ---
 
-## Step 1 — Add your domain to Cloudflare (free, no card)
-1. Sign up at <https://dash.cloudflare.com> (free plan — it never asks for a card).
-2. **Add a site** → enter `yourdomain.com` → pick the **Free** plan.
-3. Cloudflare shows **two nameservers** (e.g. `xxx.ns.cloudflare.com`).
-4. In **Namecheap → Domain List → Manage → Nameservers**, switch to **Custom DNS**
-   and paste those two. Save. (Propagation is usually minutes; Cloudflare emails you
-   when active.) This is safe and reversible — your portfolio site keeps working;
-   you just manage DNS in Cloudflare now.
+## Step 1 — Add your EXISTING domain to Cloudflare (free, no card)
+> ⚠️ Use **"Add / Connect a domain you already own"** — NOT the **Registrations** or
+> **Transfers** pages (those are for *buying* a domain from Cloudflare). Your
+> registration stays where it is; Cloudflare only takes over DNS.
+
+1. Sign up / log in at <https://dash.cloudflare.com> (Free plan — never asks for a card).
+2. **Account home → "+ Add" → "Connect a domain"** (or "Add a domain"). Enter
+   `yourdomain.com` → **Continue**. Pick the **Free** plan.
+3. Cloudflare **scans and imports your current DNS records**. **Verify your portfolio's
+   records are in the list** (the A/CNAME for `yourdomain.com` and `www`, and anything
+   your host — Vercel/Netlify/GitHub Pages/name.com — told you to add). If they're
+   there, your portfolio will keep working. **Continue.**
+4. Cloudflare shows **two nameservers** (e.g. `xxx.ns.cloudflare.com`). **Copy both.**
+5. At your registrar, switch to those nameservers:
+   - **name.com:** Domain List → your domain → **Manage Nameservers** → choose
+     **Custom** / "Use your own" → paste the two Cloudflare nameservers → Save.
+     (The "Automatic Renewal — Action Required" notice is unrelated; ignore it.)
+   - **Namecheap:** Domain List → Manage → **Nameservers → Custom DNS** → paste → save.
+6. Wait for Cloudflare to email **"your domain is active"** (minutes, sometimes a few
+   hours). Your portfolio resolves through Cloudflare to the same host — unchanged and
+   reversible. You now manage DNS in Cloudflare.
 
 ## Step 2 — Install cloudflared
 ```bash
