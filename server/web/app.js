@@ -325,18 +325,30 @@ async function getBlob(ref) {
 // Record a completed blob: RAM + persisted to disk so it survives reload.
 function saveBlob(ref, bytes) { blobs.set(ref, bytes); dbPutBlob(ref, bytes); persistedBlobRefs.add(ref); }
 
-// Drop blob transfers that stalled (peer went away mid-stream) so a file never
-// shows "receiving…" forever. The clip stays in history as metadata; a reconnect
-// backlog re-send restarts the transfer cleanly.
+// A peer is missing a blob we have → re-stream it (self-healing transfers).
+async function onResend(ref) {
+  if (!ref || !hasBlob(ref)) return;
+  const bytes = await getBlob(ref);
+  if (bytes) streamBlob(ref, bytes);
+}
+
+// Recover stalled incoming transfers: if a blob's chunks haven't all arrived a
+// few seconds after the last one, ask the sender to re-stream (bounded retries);
+// only give up (drop the "receiving…" state) after the hard stall timeout.
 const BLOB_STALL_MS = 90_000;
 function sweepStalledBlobs() {
   const now = Date.now(); let changed = false;
   for (const [ref, e] of pendingBlobs) {
-    if (now - (e.touched || 0) > BLOB_STALL_MS) { pendingBlobs.delete(ref); changed = true; }
+    const idle = now - (e.touched || 0);
+    if (idle > BLOB_STALL_MS) { pendingBlobs.delete(ref); changed = true; continue; }
+    if (idle > 3000 && (e.requested || 0) < 8 && ws?.readyState === 1 && key) {
+      e.requested = (e.requested || 0) + 1;
+      encryptClip({ resend: ref }).then((f) => { try { ws.send(f); } catch {} });
+    }
   }
   if (changed) render();
 }
-setInterval(sweepStalledBlobs, 30_000);
+setInterval(sweepStalledBlobs, 3_000);
 
 function onChunk(frame) {
   const { blob_chunk: ref, i, n, b64 } = frame;
@@ -782,6 +794,7 @@ function openWs(url) {
     try {
       const obj = JSON.parse(dec.decode(pt));
       if (obj && obj.blob_chunk) onChunk(obj); // file/image content
+      else if (obj && obj.resend) onResend(obj.resend); // peer missing a blob → re-stream
       else if (obj && obj.delete) applyDelete(obj.delete); // remote delete
       else if (obj && obj.pin) applyPin(obj.pin, obj.pinned); // remote pin toggle
       else ingest(obj); // clip metadata

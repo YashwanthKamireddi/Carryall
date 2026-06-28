@@ -71,7 +71,9 @@ pub async fn router_from_env() -> Router {
         match SqliteBacklog::open(path, 24 * 1024 * 1024) {
             Ok(store) => {
                 eprintln!("clip-relay: durable backlog at {path}");
-                Hub::with_backlog(512, Box::new(store))
+                // Large live-channel buffer so a fast multi-MB blob burst doesn't
+                // outrun a busy receiver and lose chunks before it drains.
+                Hub::with_backlog(2048, Box::new(store))
             }
             Err(e) => {
                 eprintln!("clip-relay: backlog open failed ({e}); using in-memory");
@@ -229,11 +231,12 @@ async fn client_loop(mut socket: WebSocket, hub: Arc<Hub>, account: String, devi
                     }
                 }
                 Ok(_) => {}
-                // This device fell too far behind the live channel (a fast large
-                // transfer outran a slow link). Dropping the socket forces it to
-                // reconnect and replay the backlog, so it catches up cleanly
-                // instead of silently losing the gap and corrupting a blob.
-                Err(RecvError::Lagged(_)) => break,
+                // Lagged = this receiver fell behind and the channel overwrote
+                // some frames. Do NOT drop the socket: blob chunks aren't kept in
+                // the backlog, so a reconnect can't recover them — disconnecting
+                // would strand an in-flight transfer permanently. Stay connected;
+                // the receiver detects the missing chunks and requests a resend.
+                Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => break,
             },
         }

@@ -770,9 +770,33 @@ async fn sync_connection(
     let mut pending: HashMap<String, Clip> = HashMap::new();
     // Blob reassembly (shared, unit-tested logic).
     let mut chunks = crate::proto::Reassembler::new();
+    // Resend tracking: for a blob whose chunks haven't all arrived (a peer's
+    // chunk was dropped under load / on a lag), periodically ask the sender to
+    // re-stream it — so a transfer is never permanently stuck. Bounded retries.
+    let mut resend_tracker: HashMap<String, (std::time::Instant, u32)> = HashMap::new();
+    let mut resend_tick = tokio::time::interval(std::time::Duration::from_secs(4));
+    resend_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         tokio::select! {
+            _ = resend_tick.tick() => {
+                // Request a re-stream of any blob still incomplete after a few
+                // seconds (up to a retry cap), then give up so we don't spam.
+                let now = std::time::Instant::now();
+                let refs: Vec<String> = pending.keys().cloned().collect();
+                for ref_ in refs {
+                    if crate::blobs::existing_path(&ctx.blob_dir, &ref_).is_some() { continue; }
+                    let e = resend_tracker.entry(ref_.clone()).or_insert((now, 0));
+                    if e.1 >= 8 { continue; } // give up after ~32s of retries
+                    if now.duration_since(e.0) >= std::time::Duration::from_secs(4) || e.1 == 0 {
+                        e.0 = now; e.1 += 1;
+                        let frame = serde_json::json!({ "resend": ref_ });
+                        if let Ok(j) = serde_json::to_vec(&frame) {
+                            let _ = write.send(Message::Binary(encrypt(&cfg.key, &pack(&j, true)))).await;
+                        }
+                    }
+                }
+            }
             local = outgoing.recv() => match local {
                 Ok(clip) => {
                     let stream_blob = should_stream_blob(&clip, streamed);
@@ -804,6 +828,28 @@ async fn sync_connection(
                         continue;
                     }
 
+                    // A peer is missing a blob's chunks — re-stream it if we have
+                    // the full blob on disk. Makes large transfers self-healing.
+                    if let Some(ref_) = val.get("resend").and_then(|v| v.as_str()) {
+                        if let Some(path) = crate::blobs::existing_path(&ctx.blob_dir, ref_) {
+                            if let Ok(bytes) = std::fs::read(&path) {
+                                let n = bytes.len().div_ceil(crate::proto::CHUNK).max(1);
+                                for (i, part) in bytes.chunks(crate::proto::CHUNK).enumerate() {
+                                    let frame = serde_json::json!({
+                                        "blob_chunk": ref_, "i": i, "n": n, "b64": STANDARD.encode(part),
+                                    });
+                                    if let Ok(j) = serde_json::to_vec(&frame) {
+                                        let ct = encrypt(&cfg.key, &pack(&j, false));
+                                        if write.send(Message::Binary(ct)).await.is_err() {
+                                            return Err("send failed".into());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
                     if let Some(ref_) = val.get("blob_chunk").and_then(|v| v.as_str()) {
                         // Already have this blob on disk and not mid-transfer → ignore
                         // backlog re-sends (the `pending` check first avoids a stat on
@@ -828,6 +874,7 @@ async fn sync_connection(
                                 }
                             }
                             crate::blobs::write(&ctx.blob_dir, ref_, &whole);
+                            resend_tracker.remove(ref_);
                             if let Some(clip) = pending.remove(ref_) {
                                 finalize_apply(ctx, clip);
                             }

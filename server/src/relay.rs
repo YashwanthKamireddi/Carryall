@@ -48,7 +48,7 @@ pub fn gen_origin() -> String {
 
 impl Default for Hub {
     fn default() -> Self {
-        Self::new(512, 8 * 1024 * 1024)
+        Self::new(2048, 8 * 1024 * 1024)
     }
 }
 
