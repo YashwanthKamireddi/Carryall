@@ -28,11 +28,11 @@ Copy something on one device and it’s **instantly on your other devices’ nat
 - **🔁 Automatic cross-device sync** — copy here, paste there. Incoming clips land straight on the native clipboard, ready to paste.
 - **🧬 Everything you copy** — text, links, code, colors, images, **files & folders**, video, audio — full-quality, byte-for-byte.
 - **🔒 End-to-end encrypted** — AES-256-GCM, key derived from your passphrase. Keys never leave your devices; the relay only moves ciphertext.
-- **📱 Phone app, no app store** — installable PWA on iOS *and* Android: tap to copy, long-press to preview/edit, paste or drag files to send, full-text search, pins, filters. On a desktop browser it doubles as a **keyboard quick-paste palette** (↑/↓ to select, Enter to copy, `/` to search).
+- **📱 Phone app, no app store** — installable PWA on iOS *and* Android: tap to copy, long-press to preview/edit, paste or drag files to send, full-text search, pins, filters.
 - **⚡ Two transports** — a direct **LAN fast-path** (mDNS) when devices are nearby, and an **always-on relay** for anywhere else.
 - **🪶 Featherweight** — a ~3.4 MB headless daemon at **~0% idle CPU** and ~6 MB RAM. No GUI, no WebView, no Electron, no JVM.
 - **🛡️ Private by default** — sync is off until you set an account; password-manager clips are skipped.
-- **🔍 Full history, searchable** — every clip is kept and instantly searchable, not a single 2-minute slot. Auto-retention is **configurable** (`retention_days`; `0` keeps everything).
+- **🔍 Full history, searchable** — every clip is kept (with retention controls) and instantly searchable, not a single 2-minute slot.
 
 ## How it works
 

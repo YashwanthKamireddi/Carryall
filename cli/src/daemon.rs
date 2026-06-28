@@ -170,21 +170,16 @@ pub async fn run() {
         eprintln!("carryall: local-only — run `carryall setup` to sync to your devices");
     }
 
-    // Periodic retention prune of non-pinned clips older than the configured
-    // window. Configurable so you can keep more (or everything); 0 = keep forever.
-    let days = retention_days();
-    if days > 0 {
-        let prune_ctx = ctx.clone();
-        let max_age_ms = days * 24 * 60 * 60 * 1000;
-        tokio::spawn(async move {
-            loop {
-                if let Ok(store) = prune_ctx.store.lock() {
-                    let _ = store.prune_older_than(now_ms() - max_age_ms);
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
+    // Periodic retention prune (non-pinned > 30 days).
+    let prune_ctx = ctx.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Ok(store) = prune_ctx.store.lock() {
+                let _ = store.prune_older_than(now_ms() - 30 * 24 * 60 * 60 * 1000);
             }
-        });
-    }
+            tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
+        }
+    });
 
     let _ = tokio::signal::ctrl_c().await;
 }
@@ -519,18 +514,6 @@ pub fn print_pairing() {
         }
         Err(_) => println!("\n  Open this on your phone to pair Carryall:\n\n  {url}\n"),
     }
-}
-
-/// Days of non-pinned history to keep before auto-pruning (env
-/// `CLIP_RETENTION_DAYS` or `retention_days` in config; default 30).
-/// `0` disables pruning — history is kept forever.
-fn retention_days() -> i64 {
-    std::env::var("CLIP_RETENTION_DAYS")
-        .ok()
-        .or_else(|| read_config().get("retention_days").cloned())
-        .and_then(|s| s.trim().parse::<i64>().ok())
-        .filter(|n| *n >= 0)
-        .unwrap_or(30)
 }
 
 /// Path to the user config file.
