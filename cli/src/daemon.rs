@@ -106,6 +106,38 @@ pub fn data_dir() -> PathBuf {
         .join("com.yk.clip")
 }
 
+/// Where received files/videos are saved: the user's Downloads (XDG), so they're
+/// immediately findable. Overridable with `CLIP_DOWNLOAD_DIR`.
+fn download_dir() -> PathBuf {
+    if let Ok(d) = std::env::var("CLIP_DOWNLOAD_DIR") {
+        if !d.is_empty() {
+            return PathBuf::from(d);
+        }
+    }
+    dirs::download_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Best-effort desktop notification that synced files were saved (so the user
+/// knows where they went). Linux: `notify-send`; silent if unavailable.
+fn notify_saved(paths: &[PathBuf]) {
+    #[cfg(target_os = "linux")]
+    {
+        let body = match paths.first().and_then(|p| p.file_name()) {
+            Some(name) if paths.len() == 1 => {
+                format!("Saved {} to Downloads", name.to_string_lossy())
+            }
+            _ => format!("Saved {} files to Downloads", paths.len()),
+        };
+        let _ = std::process::Command::new("notify-send")
+            .args(["-a", "Carryall", "Carryall", &body])
+            .status();
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = paths;
+}
+
 impl Ctx {
     /// Persist a freshly captured clip (dedup + blob externalize) and forward to sync.
     fn ingest(&self, new_clip: NewClip) {
@@ -929,18 +961,21 @@ pub(crate) fn finalize_apply(ctx: &Ctx, mut clip: Clip) {
     match clip.kind {
         ContentKind::Files | ContentKind::Video | ContentKind::Audio => {
             if let Some(ref_) = clip.blob_ref.clone() {
-                let paths = crate::blobs::materialize_archive(&ctx.blob_dir, &ref_);
+                // Save real files into the user's Downloads — findable, full
+                // quality, never lost — instead of a hidden store path. (The
+                // Linux clipboard is unreliable for files; a folder is the right
+                // channel, like KDE Connect / AirDrop.)
+                let dest = download_dir();
+                let paths = crate::blobs::materialize_into(&dest, &ctx.blob_dir, &ref_);
                 if !paths.is_empty() {
                     let locals: Vec<String> = paths
                         .iter()
                         .map(|p| p.to_string_lossy().into_owned())
                         .collect();
                     clip.body = Some(locals.join("\n").into_bytes());
-                    // The monitor derives its id from the file:// uri-list.
-                    let uris: Vec<String> = locals.iter().map(|l| format!("file://{l}")).collect();
-                    if let Some(nc) = crate::capture::files_clip(uris) {
-                        ctx.suppress.arm(nc.dedup_id());
-                    }
+                    notify_saved(&paths);
+                    // Files go to Downloads, not the clipboard — nothing for the
+                    // monitor to re-capture, so no suppress-guard needed here.
                 }
             }
         }

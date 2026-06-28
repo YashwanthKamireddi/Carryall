@@ -216,30 +216,70 @@ pub fn verify_ref(kind: ContentKind, blob_ref: &str, bytes: &[u8]) -> bool {
     }
 }
 
-/// Unpack a received archive blob into the received-files dir, returning the
-/// real local paths (so a synced multi-file selection becomes real files).
+/// Unpack a received archive blob into a `received/` subdir (test helper; the
+/// daemon materializes into the user's Downloads via [`materialize_into`]).
+#[cfg(test)]
 pub fn materialize_archive(dir: &Path, blob_ref: &str) -> Vec<PathBuf> {
-    let Some(bytes) = read(dir, blob_ref) else {
+    materialize_into(&dir.join("received"), dir, blob_ref)
+}
+
+/// Unpack a received archive blob into `dest` (e.g. the user's Downloads),
+/// returning the real local paths. Names that collide with an existing,
+/// different file get a ` (2)`, ` (3)`… suffix so nothing is overwritten — a
+/// received file is never silently lost or clobbered.
+pub fn materialize_into(dest: &Path, blob_dir: &Path, blob_ref: &str) -> Vec<PathBuf> {
+    let Some(bytes) = read(blob_dir, blob_ref) else {
         return Vec::new();
     };
     let Some(entries) = decode_archive(&bytes) else {
         return Vec::new();
     };
-    let recv = dir.join("received");
-    let _ = fs::create_dir_all(&recv);
+    let _ = fs::create_dir_all(dest);
     let mut out = Vec::new();
     for (name, data) in entries {
-        let Some(path) = safe_join(&recv, &name) else {
-            continue; // name resolved outside recv (traversal) — skip
+        let Some(base) = safe_join(dest, &name) else {
+            continue; // name resolved outside dest (traversal) — skip
         };
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = base.parent() {
             let _ = fs::create_dir_all(parent); // rebuild folder structure
         }
+        let path = unique_path(&base, &data);
         if fs::write(&path, &data).is_ok() {
             out.push(path);
         }
     }
     out
+}
+
+/// A non-clobbering destination for `base`: if `base` is free, use it; if it
+/// already holds the SAME bytes, reuse it (idempotent re-receive); otherwise
+/// pick `name (2).ext`, `name (3).ext`, … so a different file is never lost.
+fn unique_path(base: &Path, data: &[u8]) -> PathBuf {
+    if !base.exists() {
+        return base.to_path_buf();
+    }
+    if fs::read(base).map(|b| b == data).unwrap_or(false) {
+        return base.to_path_buf(); // same content already there
+    }
+    let stem = base
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = base
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let parent = base.parent().unwrap_or(Path::new("."));
+    for i in 2..10_000 {
+        let cand = parent.join(format!("{stem} ({i}){ext}"));
+        if !cand.exists() {
+            return cand;
+        }
+        if fs::read(&cand).map(|b| b == data).unwrap_or(false) {
+            return cand;
+        }
+    }
+    base.to_path_buf()
 }
 
 /// Join an archive entry name under `base`, rebuilding sub-folders but rejecting
@@ -325,6 +365,24 @@ mod tests {
         assert!(names.contains(&"one.txt".to_string()));
         assert!(names.contains(&"two.pdf".to_string()));
         assert_eq!(fs::read(dir.join("received/one.txt")).unwrap(), b"first");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unique_path_never_clobbers_a_different_file() {
+        let dir = std::env::temp_dir().join(format!("clip-uniq-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("v.mov");
+        // Free name → used as-is.
+        assert_eq!(unique_path(&base, b"AAA"), base);
+        fs::write(&base, b"AAA").unwrap();
+        // Same content already there → reuse (idempotent re-receive).
+        assert_eq!(unique_path(&base, b"AAA"), base);
+        // Different content → ` (2)` variant, original untouched.
+        let p2 = unique_path(&base, b"BBB");
+        assert_eq!(p2, dir.join("v (2).mov"));
+        assert_eq!(fs::read(&base).unwrap(), b"AAA");
         let _ = fs::remove_dir_all(&dir);
     }
 
