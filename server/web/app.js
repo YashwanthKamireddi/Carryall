@@ -779,13 +779,23 @@ async function connect() {
   device = localStorage.getItem("clip.device") || ("phone-" + Math.random().toString(36).slice(2, 8));
   localStorage.setItem("clip.device", device);
 
+  // Reveal the app shell SYNCHRONOUSLY, before the heavy key derivation — so a
+  // refresh goes straight to the list instead of flashing the onboarding.
+  revealApp();
+
   decryptOk = decryptFail = 0; pwWarned = false; // reset passphrase-health counters
   key = await deriveKey(secret, account);
   db = await openDb(account);
   (await dbTombstones()).forEach(([id, at]) => tombstones.set(id, at)); // deleted ids stay dead
   (await dbBlobRefs()).forEach((ref) => persistedBlobRefs.add(ref)); // know which files we still have (bytes loaded on demand)
   (await dbAll()).forEach((c) => { if (!tombstones.has(c.id)) clips.set(c.id, c); }); // load saved history (offline-ready)
+  render();
+  openWs(`${relay}?account=${encodeURIComponent(account)}&device=${encodeURIComponent(device)}`);
+}
 
+// Swap the onboarding for the app shell. Synchronous (no awaits) so it can run
+// before key derivation — the refresh path never shows the connect screen.
+function revealApp() {
   $("connect").classList.add("hidden");
   $("nav").classList.remove("hidden");
   $("searchbar").classList.remove("hidden");
@@ -795,8 +805,6 @@ async function connect() {
   setTimeout(() => $("list").classList.remove("entering"), 600);
   $("list").classList.remove("hidden");
   $("composer").classList.remove("hidden");
-  render();
-  openWs(`${relay}?account=${encodeURIComponent(account)}&device=${encodeURIComponent(device)}`);
 }
 
 // ---------- wire up ----------

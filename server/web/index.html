@@ -10,9 +10,12 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Carryall" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="/icon.svg" />
-    <link rel="icon" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.png" />
+    <link rel="icon" href="/icon.png" />
     <title>Carryall</title>
+    <!-- Pre-paint: if we're already signed in, mark the document so the connect
+         screen never flashes on refresh (CSS hides it before first paint). -->
+    <script>try{if(localStorage.getItem("clip.account")&&localStorage.getItem("clip.secret"))document.documentElement.classList.add("authed");}catch(e){}</script>
     <style>
       /* Authentic iOS/iPadOS — clean system grouped background (NO color washes),
          solid grouped-list cards, translucency reserved for nav + the floating
@@ -96,38 +99,56 @@
       #filters button:active { transform: scale(.93); }
       #filters button.on { background: var(--seg-on); box-shadow: 0 1px 3px rgba(0,0,0,.16); }
 
-      /* Connect — centered, polished onboarding card */
+      /* Connect — calm, Apple-tier onboarding. The app icon is the hero, lit by a
+         soft ambient glow drawn from the logo's own cream + slate tones. */
+      html.authed #connect { display: none !important; } /* no flash on refresh */
       #connect { flex: 1; display: flex; flex-direction: column; justify-content: center;
-        width: 100%; max-width: 400px; margin: 0 auto; padding: 16px 20px 40px; gap: 14px; }
-      #connect .hero { text-align: center; margin-bottom: 8px; }
-      #connect .appicon { width: 60px; height: 60px; margin: 0 auto 20px; border-radius: 15px;
-        background: var(--blue); display: grid; place-items: center;
-        box-shadow: 0 8px 22px -10px rgba(10,132,255,.7), inset 0 1px 0 rgba(255,255,255,.25); }
-      #connect .appicon svg { width: 32px; height: 32px; }
-      #connect .hero h2 { font-size: 27px; font-weight: 700; letter-spacing: -.4px; line-height: 1.18; }
-      #connect .hero p { color: var(--label2); font-size: 14.5px; line-height: 1.5; margin: 12px auto 0; max-width: 320px; }
+        width: 100%; max-width: 380px; margin: 0 auto;
+        padding: 24px 24px calc(28px + env(safe-area-inset-bottom)); gap: 18px; }
+      #connect .hero { text-align: center; margin-bottom: 6px; }
+      #connect .appicon { position: relative; width: 96px; height: 96px; margin: 0 auto 22px; }
+      #connect .appicon img { width: 96px; height: 96px; border-radius: 22px; display: block;
+        box-shadow: 0 18px 50px -18px rgba(0,0,0,.8), 0 2px 8px rgba(0,0,0,.5); }
+      /* ambient glow behind the icon — the signature touch */
+      #connect .appicon::before { content: ""; position: absolute; inset: -46px; z-index: -1;
+        background: radial-gradient(closest-side, rgba(236,231,222,.22), rgba(120,140,170,.14) 55%, transparent 75%);
+        filter: blur(8px); }
+      #connect .hero h2 { font-size: 30px; font-weight: 700; letter-spacing: -.5px; line-height: 1.1; }
+      #connect .hero p { color: var(--label2); font-size: 16px; line-height: 1.45; margin: 9px auto 0; }
       #connect .group { background: var(--card); border-radius: var(--r-group); overflow: hidden;
         box-shadow: inset 0 .5px 0 rgba(255,255,255,.10); }
-      #connect .group input { width: 100%; border: none; background: transparent; color: var(--label);
-        font: inherit; font-size: 17px; padding: 15px 16px; outline: none; }
-      #connect .group input:not(:last-child) { border-bottom: .5px solid var(--sep); }
-      #connect button { width: 100%; border: none; border-radius: 14px; background: var(--blue);
-        color: #fff; font: inherit; font-size: 17px; font-weight: 600; padding: 15px;
-        box-shadow: 0 8px 22px -10px rgba(10,132,255,.7), inset 0 .5px 0 rgba(255,255,255,.22);
+      #connect .row { display: flex; align-items: center; padding: 0 16px; }
+      #connect .row:not(:last-child) { border-bottom: .5px solid var(--sep); }
+      #connect .row .rl { flex: 0 0 104px; color: var(--label2); font-size: 16px; }
+      #connect .row input { flex: 1; min-width: 0; border: none; background: transparent; color: var(--label);
+        font: inherit; font-size: 16px; padding: 15px 0; outline: none; text-align: right; }
+      #connect .row input::placeholder { color: var(--label3); }
+      /* Advanced (relay) — folded away; most people use the default or a QR scan */
+      #connect .adv { align-self: center; }
+      #connect .adv summary { list-style: none; cursor: pointer; color: var(--label3); font-size: 13px;
+        text-align: center; padding: 2px; }
+      #connect .adv summary::-webkit-details-marker { display: none; }
+      #connect .adv[open] summary { color: var(--label2); margin-bottom: 8px; }
+      #connect .adv .group { margin-top: 0; }
+      #connect .adv input { width: 100%; border: none; background: transparent; color: var(--label);
+        font: inherit; font-size: 15px; padding: 14px 16px; outline: none; }
+      #connect #go { width: 100%; border: none; border-radius: 14px; background: var(--blue);
+        color: #fff; font: inherit; font-size: 17px; font-weight: 600; padding: 16px; margin-top: 2px;
+        box-shadow: 0 10px 26px -12px rgba(10,132,255,.8), inset 0 .5px 0 rgba(255,255,255,.22);
         transition: transform .14s var(--spring), opacity .14s; }
-      #connect button:active { transform: scale(.97); opacity: .92; }
-      #connect .lock { display: flex; align-items: center; justify-content: center; gap: 6px;
-        font-size: 12.5px; color: var(--label3); margin-top: 4px; }
-      #connect .lock svg { width: 13px; height: 13px; }
-      /* Value-prop trio — premium onboarding, communicates the product at a glance */
-      #connect .valueprops { display: flex; gap: 8px; margin: 2px 0; }
-      #connect .vp { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 8px;
-        background: var(--card); border-radius: 14px; padding: 15px 6px;
-        box-shadow: inset 0 .5px 0 rgba(255,255,255,.08); }
-      #connect .vp .ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,.22); }
-      #connect .vp .ic svg { width: 19px; height: 19px; color: #fff; }
-      #connect .vp span { font-size: 12px; font-weight: 600; color: var(--label2); letter-spacing: .1px; }
+      #connect #go:active { transform: scale(.97); opacity: .92; }
+      #connect .lock { font-size: 12.5px; color: var(--label3); line-height: 1.45;
+        text-align: center; padding: 0 8px; }
+      #connect .lock svg { width: 12px; height: 12px; vertical-align: -2px; margin-right: 5px; }
+      /* one calm load-in settle (skipped on refresh — the shell shows instead) */
+      #connect > * { animation: settle .5s var(--spring) both; }
+      #connect .hero { animation-delay: .02s; }
+      #connect .group { animation-delay: .08s; }
+      #connect .adv { animation-delay: .12s; }
+      #connect #go { animation-delay: .16s; }
+      #connect .lock { animation-delay: .2s; }
+      @keyframes settle { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+      @media (prefers-reduced-motion: reduce) { #connect > * { animation: none; } }
 
       /* Drag-to-send overlay */
       #droplay { position: fixed; inset: 0; z-index: 20; display: none; place-items: center;
@@ -260,26 +281,22 @@
 
     <div id="connect">
       <div class="hero">
-        <div class="appicon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9 4.5h6V7H9z" fill="#fff" stroke="none"/></svg>
-        </div>
-        <h2>Your clipboard,<br>everywhere</h2>
-        <p>Copy on one device, paste on any other. Enter the same account and passphrase as your desktop — or just scan the code from <b>carryall pair</b>.</p>
-      </div>
-      <div class="valueprops">
-        <div class="vp"><div class="ic" style="background:var(--blue)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div><span>Private</span></div>
-        <div class="vp"><div class="ic" style="background:#ff9f0a"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2 4.5 13.5H11l-1 8.5L19.5 10H13z"/></svg></div><span>Instant</span></div>
-        <div class="vp"><div class="ic" style="background:#30d158"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="13" height="10" rx="2"/><rect x="15.5" y="9" width="6" height="11" rx="1.5"/></svg></div><span>Everywhere</span></div>
+        <div class="appicon"><img src="/icon.png" alt="Carryall" width="96" height="96" /></div>
+        <h2>Carryall</h2>
+        <p>Copy here. Paste anywhere.</p>
       </div>
       <div class="group">
-        <input id="account" placeholder="Account" autocapitalize="off" autocorrect="off" spellcheck="false" />
-        <input id="secret" type="password" placeholder="Passphrase" />
-        <input id="relay" placeholder="Relay URL (optional)" autocapitalize="off" autocorrect="off" spellcheck="false" />
+        <label class="row"><span class="rl">Account</span><input id="account" placeholder="shared name" autocapitalize="off" autocorrect="off" spellcheck="false" /></label>
+        <label class="row"><span class="rl">Passphrase</span><input id="secret" type="password" placeholder="your key" /></label>
       </div>
+      <details class="adv">
+        <summary>Relay URL</summary>
+        <div class="group"><input id="relay" placeholder="wss://…/sync — blank for default" autocapitalize="off" autocorrect="off" spellcheck="false" /></div>
+      </details>
       <button id="go">Connect</button>
       <div class="lock">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-        End-to-end encrypted
+        End-to-end encrypted — your key never leaves your devices
       </div>
     </div>
     <div id="droplay"><div class="drop-card">Drop to send</div></div>

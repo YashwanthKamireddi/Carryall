@@ -32,6 +32,7 @@ const APP_JS: &str = include_str!("../web/app.js");
 const MANIFEST: &str = include_str!("../web/manifest.webmanifest");
 const SW_JS: &str = include_str!("../web/sw.js");
 const ICON_SVG: &str = include_str!("../web/icon.svg");
+const ICON_PNG: &[u8] = include_bytes!("../web/icon.png");
 
 fn served(content_type: &'static str, body: &'static str) -> impl IntoResponse {
     ([(header::CONTENT_TYPE, content_type)], body)
@@ -121,6 +122,10 @@ pub fn router_with(hub: Arc<Hub>) -> Router {
         .route(
             "/icon.svg",
             get(|| async { served("image/svg+xml", ICON_SVG) }),
+        )
+        .route(
+            "/icon.png",
+            get(|| async { ([(header::CONTENT_TYPE, "image/png")], ICON_PNG) }),
         )
         .route("/health", get(|| async { "ok" }))
         .route("/sync", get(ws_handler))
