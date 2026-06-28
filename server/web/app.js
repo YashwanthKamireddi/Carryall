@@ -224,6 +224,8 @@ function setStatus(text, cls) { $("status").className = cls || ""; $("status-tex
 // ---------- render ----------
 let flashId = null; // id of a just-arrived clip to pulse once (consumed by render)
 let popId = null; // id of a clip whose pin should spring-"pop" once (consumed by render)
+let selId = null; // keyboard-selected clip id (desktop quick-paste)
+let viewIds = []; // visible clip ids, top-to-bottom — drives arrow-key nav
 function render() {
   const list = $("list");
   const q = query.trim().toLowerCase();
@@ -242,6 +244,9 @@ function render() {
   }
   const group = (items) => `<div class="group">${items.map(cellHtml).join("")}</div>`;
   const section = (label, items) => (items.length ? `<div class="sec">${label}</div>` + group(items) : "");
+  // Visible order, top-to-bottom — drives keyboard navigation.
+  viewIds = (q ? arr : [...pinned, ...recent]).map((c) => c.id);
+  if (selId && !viewIds.includes(selId)) selId = null; // selection scrolled out of view
   list.innerHTML = q ? group(arr) : section("Pinned", pinned) + section("Recent", recent);
   flashId = popId = null; // one-shot: consumed by this render, never replays
 }
@@ -271,7 +276,8 @@ function cellHtml(c) {
   // Only offer the download affordance once the blob has actually arrived.
   const actionGlyph = FILE_KINDS.has(kind) && hasBlob(c.blob_ref) ? DOWNLOAD_SVG : null;
   const flash = c.id === flashId ? " flash" : "";
-  return `<div class="cell${flash}" data-act="open" data-id="${c.id}">
+  const sel = c.id === selId ? " sel" : "";
+  return `<div class="cell${flash}${sel}" data-act="open" data-id="${c.id}">
       <div class="leadicon" style="background:var(--c-${kind})">${inner}</div>
       <div class="body">
         <div class="ptext ${kind === "code" ? "mono" : ""}">${escapeHtml(c.preview || "")}</div>
@@ -813,6 +819,46 @@ $("list").addEventListener("click", (e) => {
     const cell = el.closest(".cell");
     if (cell) { cell.classList.add("removing"); setTimeout(() => deleteClip(c), 190); }
     else deleteClip(c);
+  }
+});
+
+// ---------- keyboard-first quick paste (shines when the PWA is open on a
+// desktop browser; inert on touch). ↑/↓ move a selection, Enter copies it,
+// "/" jumps to search, Esc clears. Pure client — no extra work on the hot path.
+function moveSel(delta) {
+  if (!viewIds.length) return;
+  let i = viewIds.indexOf(selId);
+  i = i < 0 ? (delta > 0 ? 0 : viewIds.length - 1) : Math.max(0, Math.min(viewIds.length - 1, i + delta));
+  selId = viewIds[i];
+  for (const cell of $("list").querySelectorAll(".cell")) {
+    const on = cell.dataset.id === selId;
+    cell.classList.toggle("sel", on);
+    if (on) cell.scrollIntoView({ block: "nearest" });
+  }
+}
+function copySel() {
+  const c = selId && clips.get(selId); if (!c) return;
+  const cell = $("list").querySelector(`.cell[data-id="${CSS.escape(selId)}"]`);
+  openClip(c).then((copied) => {
+    if (copied && cell) { cell.classList.add("copied"); setTimeout(() => cell.classList.remove("copied"), 700); }
+  });
+}
+document.addEventListener("keydown", (e) => {
+  if (sheetClip) return; // the preview/edit sheet owns the keyboard while open
+  const t = e.target, tag = t && t.tagName;
+  // Don't hijack the compose box or the connect-screen inputs.
+  if (t && (t.id === "msg" || t.id === "account" || t.id === "secret" || t.id === "relay")) return;
+  const inSearch = t && t.id === "search";
+  if (e.key === "ArrowDown") { e.preventDefault(); moveSel(1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); moveSel(-1); }
+  else if (e.key === "Enter" && selId) { e.preventDefault(); copySel(); }
+  else if (e.key === "Escape") {
+    if (query) { query = ""; $("search").value = ""; $("searchclear").classList.add("hidden"); render(); }
+    else if (selId) { selId = null; for (const c of $("list").querySelectorAll(".cell.sel")) c.classList.remove("sel"); }
+    if (inSearch) t.blur();
+  }
+  else if (!inSearch && tag !== "INPUT" && tag !== "TEXTAREA" && e.key === "/") {
+    e.preventDefault(); $("search").focus();
   }
 });
 // Long-press a clip → open the preview/edit sheet (short tap still copies).

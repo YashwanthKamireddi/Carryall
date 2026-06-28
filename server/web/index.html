@@ -141,6 +141,7 @@
       .cell { position: relative; display: flex; align-items: center; gap: 12px; padding: 8px 14px; min-height: 56px;
         transition: background .12s ease; }
       .cell:active { background: var(--press); }
+      .cell.sel { background: var(--press); box-shadow: inset 3px 0 0 0 var(--tint, #0a84ff); }
       .cell.flash { animation: flashin .6s var(--spring); }
       .cell.removing { opacity: 0; transform: translateX(36px);
         transition: opacity .19s ease, transform .19s var(--spring); pointer-events: none; }
