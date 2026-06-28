@@ -2,12 +2,14 @@
   "name": "Carryall",
   "short_name": "Carryall",
   "description": "Your clipboard, on every device.",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#000000",
+  "background_color": "#1b1e28",
   "theme_color": "#000000",
   "icons": [
-    { "src": "/icon.png", "sizes": "1254x1254", "type": "image/png", "purpose": "any" },
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+    { "src": "/icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" },
+    { "src": "/icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "maskable" }
   ]
 }
