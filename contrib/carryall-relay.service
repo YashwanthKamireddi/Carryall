@@ -1,0 +1,21 @@
+[Unit]
+Description=Carryall sync relay (E2E ciphertext fan-out; localhost-only behind a Cloudflare Tunnel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Bind to localhost only — the Cloudflare Tunnel is the sole public entrypoint.
+Environment=CLIP_RELAY_ADDR=127.0.0.1:8787
+# Durable backlog (offline catch-up survives restarts) lives in the data dir.
+ExecStartPre=/usr/bin/mkdir -p %h/.local/share/carryall-relay
+WorkingDirectory=%h/.local/share/carryall-relay
+ExecStart=%h/.local/bin/carryall-relay
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+
+# Install (after copying the binary to ~/.local/bin/carryall-relay):
+#   cp contrib/carryall-relay.service ~/.config/systemd/user/
+#   systemctl --user enable --now carryall-relay

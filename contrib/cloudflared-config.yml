@@ -1,0 +1,16 @@
+# Carryall relay — Cloudflare Tunnel config. Full walkthrough: RELAY-SETUP.md.
+#
+# Replace the two TUNNEL_ID placeholders (printed by `cloudflared tunnel create
+# carryall`) and the hostname. The relay listens on localhost only, so this
+# tunnel is its single public entrypoint — nothing else is exposed.
+
+tunnel: TUNNEL_ID
+credentials-file: ~/.cloudflared/TUNNEL_ID.json
+
+ingress:
+  # https://clip.yourdomain.com  →  the local relay. cloudflared upgrades the
+  # WebSocket (/sync) automatically; no extra config needed for WS.
+  - hostname: clip.yourdomain.com
+    service: http://localhost:8787
+  # Anything else gets a 404 (required catch-all).
+  - service: http_status:404

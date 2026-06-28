@@ -92,6 +92,10 @@ carryall pair        # prints a QR in your terminal
 
 Scan it with your phone’s camera — the app opens, fills in your account, and connects. The account + key ride in the URL **fragment**, so they never reach the server. Then **Add to Home Screen** and you’re set; it stays signed in and reconnects on its own.
 
+### Sync from anywhere (off your network)
+
+On the same Wi-Fi, devices sync directly. To reach your phone from anywhere, put the relay online — **free, permanent, no credit card, using your own domain** via a Cloudflare Tunnel. Step-by-step: **[RELAY-SETUP.md](RELAY-SETUP.md)**.
+
 ## Security
 
 - **AES-256-GCM**, key derived from your passphrase via **PBKDF2-HMAC-SHA256** — the key never leaves your devices.
