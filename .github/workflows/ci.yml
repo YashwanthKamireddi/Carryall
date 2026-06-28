@@ -37,6 +37,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace
       - run: cargo test --workspace
+      - name: Smoke-run the binary (proves it executes, not just compiles)
+        shell: bash
+        env:
+          # Isolate from any real config; HOME/AppData stay the ephemeral runner's.
+          CLIP_DATA_DIR: ${{ runner.temp }}/carryall-smoke
+        run: |
+          BIN=target/debug/carryall
+          [ "$RUNNER_OS" = "Windows" ] && BIN=target/debug/carryall.exe
+          "$BIN" --version  # exits 0 (no args would start the daemon and block)
+          "$BIN" --help
+          "$BIN" setup -y   # generates key, writes config; autostart degrades gracefully
+          echo "smoke OK on $RUNNER_OS"
 
   relay-image:
     name: Relay Docker image builds

@@ -69,12 +69,20 @@ Under the hood: capture is **event-driven** (it waits on the OS, never polls), s
 
 ## Quick start — one command
 
+**No Rust needed** — this downloads the prebuilt binary for your OS, generates your key, writes the config, and installs autostart:
+
 ```bash
-git clone https://github.com/YashwanthKamireddi/Carryall && cd Carryall
-./setup.sh        # builds, generates your key, writes config, installs autostart
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/YashwanthKamireddi/Carryall/main/install.sh | sh
+```
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/YashwanthKamireddi/Carryall/main/install.ps1 | iex
 ```
 
-That’s it — Carryall is now capturing and syncing in the background. Add `-y` to skip every prompt. (Prefer manual? `cargo build --release`, then put `account`/`secret`/`relay` in `~/.config/clip/config.toml`.)
+That’s it — Carryall is now capturing and syncing in the background.
+
+**From source** (if you have Rust): `git clone … && cd Carryall && ./setup.sh` (add `-y` to skip prompts). Prebuilt binaries for every OS/arch are on the [Releases](https://github.com/YashwanthKamireddi/Carryall/releases) page.
 
 ### Pair your phone in one scan
 
