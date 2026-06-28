@@ -100,7 +100,7 @@ let db = null;
 const tombstones = new Map(); // id -> deletedAt (ms); blocks backlog resurrection
 function openDb(acct) {
   return new Promise((res) => {
-    const req = indexedDB.open("clip-" + acct, 3);
+    const req = indexedDB.open("clip-" + acct, 4);
     req.onupgradeneeded = () => {
       const d = req.result;
       if (!d.objectStoreNames.contains("clips")) d.createObjectStore("clips", { keyPath: "id" });
@@ -108,6 +108,9 @@ function openDb(acct) {
       // Full file/image bytes, keyed by blob_ref — so received files survive a
       // reload/offline instead of depending on a relay backlog re-send.
       if (!d.objectStoreNames.contains("blobs")) d.createObjectStore("blobs");
+      // Lightweight per-blob index {size, at} so we can cap total phone storage
+      // (evict oldest bytes) without loading every blob into memory to measure.
+      if (!d.objectStoreNames.contains("blobMeta")) d.createObjectStore("blobMeta");
     };
     req.onsuccess = () => res(req.result);
     req.onerror = () => res(null);
@@ -118,7 +121,56 @@ function dbDel(id) { try { db?.transaction("clips", "readwrite").objectStore("cl
 // Blob bytes are stored on disk (IndexedDB), loaded into RAM only on demand
 // (when a clip is opened) so a big history doesn't sit in memory.
 function dbPutBlob(ref, bytes) { try { db?.transaction("blobs", "readwrite").objectStore("blobs").put(bytes, ref); } catch {} }
-function dbDelBlob(ref) { try { if (ref) db?.transaction("blobs", "readwrite").objectStore("blobs").delete(ref); } catch {} }
+function dbDelBlob(ref) { try { if (ref) { db?.transaction("blobs", "readwrite").objectStore("blobs").delete(ref); db?.transaction("blobMeta", "readwrite").objectStore("blobMeta").delete(ref); } } catch {} }
+function dbPutBlobMeta(ref, meta) { try { db?.transaction("blobMeta", "readwrite").objectStore("blobMeta").put(meta, ref); } catch {} }
+function dbAllBlobMeta() {
+  return new Promise((res) => {
+    if (!db) return res([]);
+    try {
+      const tx = db.transaction("blobMeta", "readonly").objectStore("blobMeta");
+      const ks = tx.getAllKeys(), vs = tx.getAll();
+      tx.transaction.oncomplete = () => res((ks.result || []).map((k, i) => [k, vs.result[i]]));
+      tx.transaction.onerror = () => res([]);
+    } catch { res([]); }
+  });
+}
+
+// Cap persisted blob storage on the phone so history can't grow without bound
+// (browsers evict the WHOLE origin when over quota — losing everything). When
+// over the cap we evict the OLDEST blob bytes; the clip row stays and its bytes
+// re-fetch on demand (resend) if reopened. Tracks size/age in memory + blobMeta.
+const BLOB_STORE_CAP = 300 * 1024 * 1024;
+const blobMeta = new Map(); // ref -> { size, at }
+let blobBytesTotal = 0;
+async function loadBlobMeta() {
+  blobMeta.clear(); blobBytesTotal = 0;
+  for (const [ref, m] of await dbAllBlobMeta()) {
+    if (m && typeof m.size === "number") { blobMeta.set(ref, m); blobBytesTotal += m.size; }
+  }
+}
+function trackBlob(ref, size) {
+  const prev = blobMeta.get(ref);
+  if (prev) blobBytesTotal -= prev.size;
+  const m = { size, at: Date.now() };
+  blobMeta.set(ref, m); blobBytesTotal += size; dbPutBlobMeta(ref, m);
+  enforceBlobCap();
+}
+function untrackBlob(ref) {
+  const m = blobMeta.get(ref);
+  if (m) { blobBytesTotal -= m.size; blobMeta.delete(ref); }
+}
+function enforceBlobCap() {
+  if (blobBytesTotal <= BLOB_STORE_CAP) return;
+  // Oldest first; never evict a pinned clip's blob.
+  const pinnedRefs = new Set([...clips.values()].filter((c) => c.pinned).map((c) => c.blob_ref));
+  const order = [...blobMeta.entries()].sort((a, b) => a[1].at - b[1].at);
+  for (const [ref, m] of order) {
+    if (blobBytesTotal <= BLOB_STORE_CAP) break;
+    if (pinnedRefs.has(ref)) continue;
+    blobBytesTotal -= m.size; blobMeta.delete(ref);
+    blobs.delete(ref); persistedBlobRefs.delete(ref); dbDelBlob(ref);
+  }
+}
 function dbGetBlob(ref) {
   return new Promise((res) => {
     if (!db || !ref) return res(null);
@@ -323,7 +375,7 @@ async function getBlob(ref) {
   return bytes;
 }
 // Record a completed blob: RAM + persisted to disk so it survives reload.
-function saveBlob(ref, bytes) { blobs.set(ref, bytes); dbPutBlob(ref, bytes); persistedBlobRefs.add(ref); }
+function saveBlob(ref, bytes) { blobs.set(ref, bytes); dbPutBlob(ref, bytes); persistedBlobRefs.add(ref); trackBlob(ref, bytes.length); }
 
 // A peer is missing a blob we have → re-stream it (self-healing transfers).
 async function onResend(ref) {
@@ -482,7 +534,7 @@ function applyPin(id, pinned) {
 }
 function forgetBlob(ref) {
   if (!ref) return;
-  blobs.delete(ref); persistedBlobRefs.delete(ref); dbDelBlob(ref);
+  blobs.delete(ref); persistedBlobRefs.delete(ref); dbDelBlob(ref); untrackBlob(ref);
 }
 async function deleteClip(c) {
   const at = Date.now();
@@ -840,6 +892,7 @@ async function connect() {
   db = await openDb(account);
   (await dbTombstones()).forEach(([id, at]) => tombstones.set(id, at)); // deleted ids stay dead
   (await dbBlobRefs()).forEach((ref) => persistedBlobRefs.add(ref)); // know which files we still have (bytes loaded on demand)
+  await loadBlobMeta(); // total persisted-blob size, for the storage cap
   (await dbAll()).forEach((c) => { if (!tombstones.has(c.id)) clips.set(c.id, c); }); // load saved history (offline-ready)
   render();
   openWs(`${relay}?account=${encodeURIComponent(account)}&device=${encodeURIComponent(device)}`);
