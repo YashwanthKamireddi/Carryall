@@ -67,22 +67,17 @@ Carryall is built to disappear into the background and move data as fast as the 
 
 Under the hood: capture is **event-driven** (it waits on the OS, never polls), so idle cost is effectively zero. Payloads are **gzip-compressed before encryption**, so text and code fly across the wire. Large files stream as **pipelined 256 KiB content-addressed chunks** with **blake3** dedup. Sync survives drops — clips captured while offline **replay automatically on reconnect**, and the relay keeps a **durable backlog** so a restart never loses your catch-up.
 
-## Quick start — one command
+## Quick start
 
-**No Rust needed** — this downloads the prebuilt binary for your OS, generates your key, writes the config, and installs autostart:
+**Build from source** (needs [Rust](https://rustup.rs)):
 
 ```bash
-# macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/YashwanthKamireddi/Carryall/main/install.sh | sh
-```
-```powershell
-# Windows (PowerShell)
-irm https://raw.githubusercontent.com/YashwanthKamireddi/Carryall/main/install.ps1 | iex
+git clone https://github.com/YashwanthKamireddi/Carryall && cd Carryall
+./setup.sh            # builds release, generates your key, writes config, installs autostart
+# add -y to skip the prompts
 ```
 
-That’s it — Carryall is now capturing and syncing in the background.
-
-**From source** (if you have Rust): `git clone … && cd Carryall && ./setup.sh` (add `-y` to skip prompts). Prebuilt binaries for every OS/arch are on the [Releases](https://github.com/YashwanthKamireddi/Carryall/releases) page.
+That’s it — Carryall is now capturing and syncing in the background. Prefer to run the daemon and relay by hand (no autostart)? See [Development](#development).
 
 ### Pair your phone in one scan
 
