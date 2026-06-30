@@ -1,14 +1,19 @@
 [Unit]
-Description=Carryall sync relay (E2E ciphertext fan-out; localhost-only behind a Cloudflare Tunnel)
+Description=Carryall sync relay (E2E ciphertext fan-out; localhost-only behind a tunnel)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Bind to localhost only — the Cloudflare Tunnel is the sole public entrypoint.
+# Bind to localhost only — the tunnel (Tailscale Serve / Cloudflare) is the sole
+# public entrypoint; nothing else is exposed.
 Environment=CLIP_RELAY_ADDR=127.0.0.1:8787
-# Durable backlog (offline catch-up survives restarts) lives in the data dir.
-ExecStartPre=/usr/bin/mkdir -p %h/.local/share/carryall-relay
-WorkingDirectory=%h/.local/share/carryall-relay
+# StateDirectory makes systemd create ~/.local/state/carryall-relay (with the
+# right perms) BEFORE the unit starts. An ExecStartPre mkdir can't do this: the
+# WorkingDirectory chdir is applied first, so it fails 200/CHDIR on a dir that
+# doesn't exist yet. The durable backlog (offline catch-up across restarts) and
+# its absolute path live there.
+StateDirectory=carryall-relay
+Environment=CLIP_RELAY_DB=%S/carryall-relay/backlog.db
 ExecStart=%h/.local/bin/carryall-relay
 Restart=on-failure
 RestartSec=3
@@ -18,4 +23,5 @@ WantedBy=default.target
 
 # Install (after copying the binary to ~/.local/bin/carryall-relay):
 #   cp contrib/carryall-relay.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
 #   systemctl --user enable --now carryall-relay

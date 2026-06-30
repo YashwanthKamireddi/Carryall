@@ -24,6 +24,10 @@ src-tauri/gen
 .DS_Store
 Thumbs.db
 
+# Daemon runtime + stray scratch (never belong in the repo)
+pid
+/pics/
+
 # Figma source files (large binaries — not for the repo)
 *.fig
 

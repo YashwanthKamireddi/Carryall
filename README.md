@@ -94,7 +94,7 @@ Scan it with your phone’s camera — the app opens, fills in your account, and
 
 ### Sync from anywhere (off your network)
 
-On the same Wi-Fi, devices sync directly. To reach your phone from anywhere, put the relay online — **free, permanent, no credit card, using your own domain** via a Cloudflare Tunnel. Step-by-step: **[RELAY-SETUP.md](RELAY-SETUP.md)**.
+On the same Wi-Fi, devices sync directly through the LAN fast-path. Off your network, point each device at a `carryall-relay` you host — it only ever sees ciphertext — by setting `relay = "wss://<your-host>/sync"` in `~/.config/clip/config.toml`. Any HTTPS reverse-tunnel (Cloudflare Tunnel, Tailscale Serve, etc.) works as the entrypoint.
 
 ## Security
 
