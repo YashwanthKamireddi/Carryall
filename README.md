@@ -89,7 +89,7 @@ Scan it with your phone’s camera — the app opens, fills in your account, and
 
 ### Sync from anywhere (off your network)
 
-On the same Wi-Fi, devices sync directly through the LAN fast-path. Off your network, point each device at a `carryall-relay` you host — it only ever sees ciphertext — by setting `relay = "wss://<your-host>/sync"` in `~/.config/clip/config.toml`. Any HTTPS reverse-tunnel (Cloudflare Tunnel, Tailscale Serve, etc.) works as the entrypoint.
+On the same Wi-Fi, devices sync directly through the LAN fast-path. Off your network, point each device at a `carryall-relay` you host — it only ever sees ciphertext — by setting `relay = "wss://<your-host>/sync"` in `~/.config/clip/config.toml`. Any HTTPS reverse-tunnel (Cloudflare Tunnel, Tailscale Serve, etc.) works as the entrypoint. See [`server/DEPLOY.md`](server/DEPLOY.md) for the full relay-hosting guide; [`contrib/`](contrib/) ships a ready-made `carryall-relay.service` systemd unit and a Cloudflare Tunnel config.
 
 ## Security
 

@@ -39,7 +39,7 @@ Put it behind a TLS-terminating reverse proxy (Caddy/nginx) with a domain.
   ```bash
   CLIP_ACCOUNT=<you> CLIP_SECRET=<passphrase> \
   CLIP_RELAY_URL=wss://<your-relay>/sync \
-  clip
+  carryall
   ```
   (`wss://` for a TLS relay; the desktop client supports it.)
 
